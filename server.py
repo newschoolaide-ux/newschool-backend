@@ -210,7 +210,36 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
     }
     await db.events.insert_one(event_doc)
     await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"create_credit": -1}})
-    return {"id": event_id, "event_id": event_id, "message": "Event created successfully"}
+     return {
+        "event_id": event_id,
+        "id": event_id,
+        "name": event.name,
+        "description": event.description,
+        "latitude": event.latitude,
+        "longitude": event.longitude,
+        "location_name": address,
+        "address": address,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "duration_hours": event.duration_hours or 2,
+        "creator_id": current_user["_id"],
+        "creator_name": current_user.get("first_name", ""),
+        "creator_photo": current_user.get("photo"),
+        "participants": [{
+            "user_id": current_user["_id"],
+            "first_name": current_user.get("first_name", "User"),
+            "photo": current_user.get("photo"),
+            "joined_at": datetime.utcnow().isoformat()
+        }],
+        "current_participants": 1,
+        "max_participants": event.max_participants or 50,
+        "is_full": False,
+        "theme": event.theme,
+        "photo": photo_data,
+        "desired_nationalities": event.desired_nationalities or [],
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat()
+    }
 
 @app.get("/api/events")
 async def get_events(current_user: dict = Depends(get_current_user)):
