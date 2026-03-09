@@ -56,14 +56,15 @@ class EventCreate(BaseModel):
     description: str
     latitude: float
     longitude: float
+    location_name: Optional[str] = ""
     address: Optional[str] = ""
-    start_time: datetime
-    end_time: datetime
     max_participants: Optional[int] = 50
-    theme: Optional[str] = "general"
+    duration_hours: Optional[int] = 2
+    theme: Optional[str] = None
     gender_filter: Optional[str] = "all"
-    min_age: Optional[int] = 18
-    max_age: Optional[int] = 99
+    age_ranges: Optional[List[str]] = []
+    desired_nationalities: Optional[List[str]] = []
+    photo: Optional[str] = None
     photo_base64: Optional[str] = None
 
 class MessageCreate(BaseModel):
@@ -184,23 +185,27 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
     if current_user.get("create_credit", 0) <= 0:
         raise HTTPException(status_code=403, detail="No create credits left")
     event_id = generate_event_id()
+    start_time = datetime.utcnow()
+    end_time = start_time + timedelta(hours=event.duration_hours or 2)
+    address = event.location_name or event.address or ""
+    photo_data = event.photo or event.photo_base64
     event_doc = {
         "_id": event_id,
         "name": event.name,
         "description": event.description,
         "location": {"type": "Point", "coordinates": [event.longitude, event.latitude]},
-        "address": event.address,
-        "start_time": event.start_time,
-        "end_time": event.end_time,
+        "address": address,
+        "start_time": start_time,
+        "end_time": end_time,
         "creator_id": current_user["_id"],
         "creator_name": current_user.get("first_name", ""),
         "participants": [current_user["_id"]],
-        "max_participants": event.max_participants,
+        "max_participants": event.max_participants or 50,
         "theme": event.theme,
-        "gender_filter": event.gender_filter,
-        "min_age": event.min_age,
-        "max_age": event.max_age,
-        "photo_base64": event.photo_base64,
+        "gender_filter": event.gender_filter or "all",
+        "age_ranges": event.age_ranges or [],
+        "desired_nationalities": event.desired_nationalities or [],
+        "photo_base64": photo_data,
         "created_at": datetime.utcnow()
     }
     await db.events.insert_one(event_doc)
