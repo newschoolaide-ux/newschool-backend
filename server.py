@@ -1,5 +1,3 @@
-
-
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -210,7 +208,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
     }
     await db.events.insert_one(event_doc)
     await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"create_credit": -1}})
-     return {
+    return {
         "event_id": event_id,
         "id": event_id,
         "name": event.name,
@@ -225,12 +223,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "creator_id": current_user["_id"],
         "creator_name": current_user.get("first_name", ""),
         "creator_photo": current_user.get("photo"),
-        "participants": [{
-            "user_id": current_user["_id"],
-            "first_name": current_user.get("first_name", "User"),
-            "photo": current_user.get("photo"),
-            "joined_at": datetime.utcnow().isoformat()
-        }],
+        "participants": [{"user_id": current_user["_id"], "first_name": current_user.get("first_name", "User"), "photo": current_user.get("photo"), "joined_at": datetime.utcnow().isoformat()}],
         "current_participants": 1,
         "max_participants": event.max_participants or 50,
         "is_full": False,
@@ -251,12 +244,7 @@ async def get_events(current_user: dict = Depends(get_current_user)):
         for pid in participant_ids:
             user = await db.users.find_one({"_id": pid})
             if user:
-                participants_data.append({
-                    "user_id": pid,
-                    "first_name": user.get("first_name", "User"),
-                    "photo": user.get("photo"),
-                    "joined_at": e.get("created_at", datetime.utcnow()).isoformat()
-                })
+                participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": e.get("created_at", datetime.utcnow()).isoformat()})
         creator = await db.users.find_one({"_id": e["creator_id"]})
         creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
         creator_photo = creator.get("photo") if creator else None
@@ -284,7 +272,7 @@ async def get_events(current_user: dict = Depends(get_current_user)):
             "is_full": len(participant_ids) >= e.get("max_participants", 50),
             "theme": e.get("theme", "general"),
             "photo": e.get("photo_base64"),
-            "desired_nationalities": [],
+            "desired_nationalities": e.get("desired_nationalities", []),
             "status": "active",
             "created_at": e.get("created_at", datetime.utcnow()).isoformat()
         })
@@ -293,15 +281,7 @@ async def get_events(current_user: dict = Depends(get_current_user)):
 @app.get("/api/events/nearby")
 async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
     await db.events.create_index([("location", "2dsphere")])
-    events = await db.events.find({
-        "location": {
-            "$nearSphere": {
-                "$geometry": {"type": "Point", "coordinates": [longitude, latitude]},
-                "$maxDistance": radius_km * 1000
-            }
-        },
-        "end_time": {"$gte": datetime.utcnow()}
-    }).to_list(100)
+    events = await db.events.find({"location": {"$nearSphere": {"$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, "$maxDistance": radius_km * 1000}}, "end_time": {"$gte": datetime.utcnow()}}).to_list(100)
     result = []
     for e in events:
         participant_ids = e.get("participants", [])
@@ -309,12 +289,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
         for pid in participant_ids:
             user = await db.users.find_one({"_id": pid})
             if user:
-                participants_data.append({
-                    "user_id": pid,
-                    "first_name": user.get("first_name", "User"),
-                    "photo": user.get("photo"),
-                    "joined_at": e.get("created_at", datetime.utcnow()).isoformat()
-                })
+                participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": e.get("created_at", datetime.utcnow()).isoformat()})
         creator = await db.users.find_one({"_id": e["creator_id"]})
         creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
         creator_photo = creator.get("photo") if creator else None
@@ -342,7 +317,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "is_full": len(participant_ids) >= e.get("max_participants", 50),
             "theme": e.get("theme", "general"),
             "photo": e.get("photo_base64"),
-            "desired_nationalities": [],
+            "desired_nationalities": e.get("desired_nationalities", []),
             "status": "active",
             "created_at": e.get("created_at", datetime.utcnow()).isoformat()
         })
@@ -358,12 +333,7 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     for pid in participant_ids:
         user = await db.users.find_one({"_id": pid})
         if user:
-            participants_data.append({
-                "user_id": pid,
-                "first_name": user.get("first_name", "User"),
-                "photo": user.get("photo"),
-                "joined_at": event.get("created_at", datetime.utcnow()).isoformat()
-            })
+            participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": event.get("created_at", datetime.utcnow()).isoformat()})
     creator = await db.users.find_one({"_id": event["creator_id"]})
     creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
     creator_photo = creator.get("photo") if creator else None
@@ -391,7 +361,7 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
         "is_full": len(participant_ids) >= event.get("max_participants", 50),
         "theme": event.get("theme", "general"),
         "photo": event.get("photo_base64"),
-        "desired_nationalities": [],
+        "desired_nationalities": event.get("desired_nationalities", []),
         "status": "active",
         "created_at": event.get("created_at", datetime.utcnow()).isoformat()
     }
@@ -468,11 +438,7 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
-    return [
-        {"tier": "free", "price": 0, "monthly_limit": 3, "features": ["3 participations/mois", "1 création/mois", "Chat basique"]},
-        {"tier": "standard", "price": 9.99, "monthly_limit": 15, "features": ["15 participations/mois", "5 créations/mois", "Chat illimité", "Badge Standard"]},
-        {"tier": "ambassador", "price": 19.99, "monthly_limit": 999, "features": ["Participations illimitées", "Créations illimitées", "Badge Ambassadeur", "Support prioritaire"]}
-    ]
+    return [{"tier": "free", "price": 0, "monthly_limit": 3, "features": ["3 participations/mois", "1 creation/mois"]}, {"tier": "standard", "price": 9.99, "monthly_limit": 15, "features": ["15 participations/mois", "5 creations/mois"]}, {"tier": "ambassador", "price": 19.99, "monthly_limit": 999, "features": ["Illimite"]}]
 
 @app.post("/api/subscriptions/upgrade")
 async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
