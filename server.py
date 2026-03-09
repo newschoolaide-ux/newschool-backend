@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -216,22 +217,54 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
 @app.get("/api/events")
 async def get_events(current_user: dict = Depends(get_current_user)):
     events = await db.events.find().sort("start_time", 1).to_list(100)
-    return [{
-        "id": e["_id"],
-        "name": e["name"],
-        "description": e["description"],
-        "latitude": e["location"]["coordinates"][1],
-        "longitude": e["location"]["coordinates"][0],
-        "address": e.get("address", ""),
-        "start_time": e["start_time"].isoformat(),
-        "end_time": e["end_time"].isoformat(),
-        "creator_id": e["creator_id"],
-        "creator_name": e.get("creator_name", ""),
-        "participants": e.get("participants", []),
-        "max_participants": e.get("max_participants", 50),
-        "theme": e.get("theme", "general"),
-        "photo_base64": e.get("photo_base64")
-    } for e in events]
+    result = []
+    for e in events:
+        participant_ids = e.get("participants", [])
+        participants_data = []
+        for pid in participant_ids:
+            user = await db.users.find_one({"_id": pid})
+            if user:
+                participants_data.append({
+                    "user_id": pid,
+                    "first_name": user.get("first_name", "User"),
+                    "photo": user.get("photo"),
+                    "joined_at": e.get("created_at", datetime.utcnow()).isoformat()
+                })
+        
+        creator = await db.users.find_one({"_id": e["creator_id"]})
+        creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
+        creator_photo = creator.get("photo") if creator else None
+        
+        start = e.get("start_time", datetime.utcnow())
+        end = e.get("end_time", start + timedelta(hours=2))
+        duration_hours = max(1, int((end - start).total_seconds() / 3600))
+        
+        result.append({
+            "event_id": e["_id"],
+            "id": e["_id"],
+            "name": e["name"],
+            "description": e["description"],
+            "latitude": e["location"]["coordinates"][1],
+            "longitude": e["location"]["coordinates"][0],
+            "location_name": e.get("address", ""),
+            "address": e.get("address", ""),
+            "start_time": e["start_time"].isoformat(),
+            "end_time": e["end_time"].isoformat(),
+            "duration_hours": duration_hours,
+            "creator_id": e["creator_id"],
+            "creator_name": creator_name,
+            "creator_photo": creator_photo,
+            "participants": participants_data,
+            "current_participants": len(participant_ids),
+            "max_participants": e.get("max_participants", 50),
+            "is_full": len(participant_ids) >= e.get("max_participants", 50),
+            "theme": e.get("theme", "general"),
+            "photo": e.get("photo_base64"),
+            "desired_nationalities": [],
+            "status": "active",
+            "created_at": e.get("created_at", datetime.utcnow()).isoformat()
+        })
+    return {"events": result}
 
 @app.get("/api/events/nearby")
 async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
@@ -247,22 +280,54 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
         "end_time": {"$gte": datetime.utcnow()}
     }).to_list(100)
     
-    return [{
-        "id": e["_id"],
-        "name": e["name"],
-        "description": e["description"],
-        "latitude": e["location"]["coordinates"][1],
-        "longitude": e["location"]["coordinates"][0],
-        "address": e.get("address", ""),
-        "start_time": e["start_time"].isoformat(),
-        "end_time": e["end_time"].isoformat(),
-        "creator_id": e["creator_id"],
-        "creator_name": e.get("creator_name", ""),
-        "participants": e.get("participants", []),
-        "max_participants": e.get("max_participants", 50),
-        "theme": e.get("theme", "general"),
-        "photo_base64": e.get("photo_base64")
-    } for e in events]
+    result = []
+    for e in events:
+        participant_ids = e.get("participants", [])
+        participants_data = []
+        for pid in participant_ids:
+            user = await db.users.find_one({"_id": pid})
+            if user:
+                participants_data.append({
+                    "user_id": pid,
+                    "first_name": user.get("first_name", "User"),
+                    "photo": user.get("photo"),
+                    "joined_at": e.get("created_at", datetime.utcnow()).isoformat()
+                })
+        
+        creator = await db.users.find_one({"_id": e["creator_id"]})
+        creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
+        creator_photo = creator.get("photo") if creator else None
+        
+        start = e.get("start_time", datetime.utcnow())
+        end = e.get("end_time", start + timedelta(hours=2))
+        duration_hours = max(1, int((end - start).total_seconds() / 3600))
+        
+        result.append({
+            "event_id": e["_id"],
+            "id": e["_id"],
+            "name": e["name"],
+            "description": e["description"],
+            "latitude": e["location"]["coordinates"][1],
+            "longitude": e["location"]["coordinates"][0],
+            "location_name": e.get("address", ""),
+            "address": e.get("address", ""),
+            "start_time": e["start_time"].isoformat(),
+            "end_time": e["end_time"].isoformat(),
+            "duration_hours": duration_hours,
+            "creator_id": e["creator_id"],
+            "creator_name": creator_name,
+            "creator_photo": creator_photo,
+            "participants": participants_data,
+            "current_participants": len(participant_ids),
+            "max_participants": e.get("max_participants", 50),
+            "is_full": len(participant_ids) >= e.get("max_participants", 50),
+            "theme": e.get("theme", "general"),
+            "photo": e.get("photo_base64"),
+            "desired_nationalities": [],
+            "status": "active",
+            "created_at": e.get("created_at", datetime.utcnow()).isoformat()
+        })
+    return {"events": result}
 
 @app.get("/api/events/{event_id}")
 async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
@@ -270,24 +335,50 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     
+    participant_ids = event.get("participants", [])
+    participants_data = []
+    for pid in participant_ids:
+        user = await db.users.find_one({"_id": pid})
+        if user:
+            participants_data.append({
+                "user_id": pid,
+                "first_name": user.get("first_name", "User"),
+                "photo": user.get("photo"),
+                "joined_at": event.get("created_at", datetime.utcnow()).isoformat()
+            })
+    
+    creator = await db.users.find_one({"_id": event["creator_id"]})
+    creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
+    creator_photo = creator.get("photo") if creator else None
+    
+    start = event.get("start_time", datetime.utcnow())
+    end = event.get("end_time", start + timedelta(hours=2))
+    duration_hours = max(1, int((end - start).total_seconds() / 3600))
+    
     return {
+        "event_id": event["_id"],
         "id": event["_id"],
         "name": event["name"],
         "description": event["description"],
         "latitude": event["location"]["coordinates"][1],
         "longitude": event["location"]["coordinates"][0],
+        "location_name": event.get("address", ""),
         "address": event.get("address", ""),
         "start_time": event["start_time"].isoformat(),
         "end_time": event["end_time"].isoformat(),
+        "duration_hours": duration_hours,
         "creator_id": event["creator_id"],
-        "creator_name": event.get("creator_name", ""),
-        "participants": event.get("participants", []),
+        "creator_name": creator_name,
+        "creator_photo": creator_photo,
+        "participants": participants_data,
+        "current_participants": len(participant_ids),
         "max_participants": event.get("max_participants", 50),
+        "is_full": len(participant_ids) >= event.get("max_participants", 50),
         "theme": event.get("theme", "general"),
-        "gender_filter": event.get("gender_filter", "all"),
-        "min_age": event.get("min_age", 18),
-        "max_age": event.get("max_age", 99),
-        "photo_base64": event.get("photo_base64")
+        "photo": event.get("photo_base64"),
+        "desired_nationalities": [],
+        "status": "active",
+        "created_at": event.get("created_at", datetime.utcnow()).isoformat()
     }
 
 @app.post("/api/events/{event_id}/join")
@@ -451,4 +542,3 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-
