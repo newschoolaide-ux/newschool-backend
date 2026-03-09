@@ -138,7 +138,7 @@ async def register(user: UserCreate):
     await db.users.insert_one(user_doc)
     token = create_access_token({"sub": user_id})
     
-    return {"access_token": token, "token_type": "bearer", "user": {
+    return {"access_token": token, "token": token, "token_type": "bearer", "user": {
         "id": user_id,
         "email": user.email,
         "first_name": user.first_name,
@@ -158,7 +158,7 @@ async def login(user: UserLogin):
     
     token = create_access_token({"sub": db_user["_id"]})
     
-    return {"access_token": token, "token_type": "bearer", "user": {
+    return {"access_token": token, "token": token, "token_type": "bearer", "user": {
         "id": db_user["_id"],
         "email": db_user["email"],
         "first_name": db_user.get("first_name", ""),
