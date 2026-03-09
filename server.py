@@ -327,7 +327,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "status": "active",
             "created_at": e.get("created_at", datetime.utcnow()).isoformat()
         })
-    return {"events": result}
+    return result
 
 @app.get("/api/events/{event_id}")
 async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
@@ -379,7 +379,9 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
         "desired_nationalities": [],
         "status": "active",
         "created_at": event.get("created_at", datetime.utcnow()).isoformat()
-    }
+    })
+   return result
+
 
 @app.post("/api/events/{event_id}/join")
 async def join_event(event_id: str, current_user: dict = Depends(get_current_user)):
