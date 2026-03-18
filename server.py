@@ -438,7 +438,7 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
-    return [{"tier": "free", "price": 0, "monthly_limit": 3, "features": ["3 participations/mois", "1 creation/mois"]}, {"tier": "standard", "price": 9.99, "monthly_limit": 15, "features": ["15 participations/mois", "5 creations/mois"]}, {"tier": "ambassador", "price": 19.99, "monthly_limit": 999, "features": ["Illimite"]}]
+    return [{"tier": "free", "price": 0, "monthly_limit": 3, "features": ["3 participations/mois", "1 creation/mois"]}, {"tier": "standard", "price": 4.99, "monthly_limit": 15, "features": ["15 participations/mois", "5 creations/mois"]}, {"tier": "ambassador", "price": 6.99, "monthly_limit": 999, "features": ["Illimite"]}]
 
 @app.post("/api/subscriptions/upgrade")
 async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
