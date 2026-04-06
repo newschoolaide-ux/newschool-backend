@@ -71,6 +71,13 @@ class MessageCreate(BaseModel):
 class SubscriptionUpgrade(BaseModel):
     tier: str
 
+class AppleAuthRequest(BaseModel):
+    identity_token: str
+    email: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    user_identifier: str
+
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -159,6 +166,98 @@ async def login(user: UserLogin):
             "last_name": db_user.get("last_name", ""),
             "role": db_user.get("role", "user"),
             "subscription_tier": db_user.get("subscription_tier", "free")
+        }
+    }
+@app.post("/api/auth/apple")
+async def apple_auth(data: AppleAuthRequest):
+    """Authenticate with Apple Sign In"""
+    # Check if user exists by Apple user identifier
+    existing_user = await db.users.find_one({"apple_user_id": data.user_identifier})
+    
+    if existing_user:
+        # User exists, log them in
+        if existing_user.get("is_banned"):
+            raise HTTPException(status_code=403, detail="Account banned")
+        token = create_access_token({"sub": existing_user["_id"]})
+        return {
+            "access_token": token,
+            "token": token,
+            "token_type": "bearer",
+            "user": {
+                "user_id": existing_user["_id"],
+                "id": existing_user["_id"],
+                "email": existing_user.get("email", ""),
+                "first_name": existing_user.get("first_name", ""),
+                "last_name": existing_user.get("last_name", ""),
+                "role": existing_user.get("role", "user"),
+                "subscription_tier": existing_user.get("subscription_tier", "free")
+            }
+        }
+    
+    # New user - create account
+    email = data.email or f"apple_{data.user_identifier[:8]}@private.appleid.com"
+    first_name = data.first_name or "Utilisateur"
+    last_name = data.last_name or ""
+    
+    # Check if email already exists
+    if data.email:
+        email_exists = await db.users.find_one({"email": data.email})
+        if email_exists:
+            # Link Apple ID to existing account
+            await db.users.update_one(
+                {"_id": email_exists["_id"]},
+                {"$set": {"apple_user_id": data.user_identifier}}
+            )
+            token = create_access_token({"sub": email_exists["_id"]})
+            return {
+                "access_token": token,
+                "token": token,
+                "token_type": "bearer",
+                "user": {
+                    "user_id": email_exists["_id"],
+                    "id": email_exists["_id"],
+                    "email": email_exists.get("email", ""),
+                    "first_name": email_exists.get("first_name", ""),
+                    "last_name": email_exists.get("last_name", ""),
+                    "role": email_exists.get("role", "user"),
+                    "subscription_tier": email_exists.get("subscription_tier", "free")
+                }
+            }
+    
+    # Create new user
+    user_id = f"user_{secrets.token_hex(8)}"
+    role = "admin" if email == ADMIN_EMAIL else "user"
+    
+    user_doc = {
+        "_id": user_id,
+        "email": email,
+        "apple_user_id": data.user_identifier,
+        "password_hash": None,
+        "first_name": first_name,
+        "last_name": last_name,
+        "role": role,
+        "subscription_tier": "free",
+        "create_credit": 1,
+        "join_credit": 3,
+        "is_banned": False,
+        "created_at": datetime.utcnow()
+    }
+    
+    await db.users.insert_one(user_doc)
+    token = create_access_token({"sub": user_id})
+    
+    return {
+        "access_token": token,
+        "token": token,
+        "token_type": "bearer",
+        "user": {
+            "user_id": user_id,
+            "id": user_id,
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "role": role,
+            "subscription_tier": "free"
         }
     }
 
