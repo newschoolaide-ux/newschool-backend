@@ -560,16 +560,23 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
     chats = []
     for event in events:
         last_message = await db.messages.find_one({"event_id": event["_id"]}, sort=[("timestamp", -1)])
+        last_message_data = None
+        if last_message:
+            last_message_data = {
+                "content": last_message["content"],
+                "sender_name": last_message.get("user_name", ""),
+                "created_at": last_message["timestamp"].isoformat()
+            }
         chats.append({
             "event_id": event["_id"],
             "event_name": event["name"],
             "event_theme": event.get("theme", "general"),
-            "last_message": last_message["content"] if last_message else "",
-            "last_message_time": last_message["timestamp"].isoformat() if last_message else None,
-            "participants_count": len(event.get("participants", []))
+            "event_photo": event.get("photo_base64"),
+            "last_message": last_message_data,
+            "participants_count": len(event.get("participants", [])),
+            "unread_count": 0
         })
     return chats
-
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
     return [
