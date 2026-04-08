@@ -543,16 +543,22 @@ async def get_messages(event_id: str, current_user: dict = Depends(get_current_u
     messages = await db.messages.find({"event_id": event_id}).sort("timestamp", 1).to_list(100)
     return [{"id": str(m["_id"]), "user_id": m["user_id"], "user_name": m.get("user_name", ""), "content": m["content"], "timestamp": m["timestamp"].isoformat()} for m in messages]
 
-@app.post("/api/events/{event_id}/messages")
-async def send_message(event_id: str, message: MessageCreate, current_user: dict = Depends(get_current_user)):
-    event = await db.events.find_one({"_id": event_id})
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
-    if current_user["_id"] not in event.get("participants", []):
-        raise HTTPException(status_code=403, detail="Not a participant")
-    msg_doc = {"event_id": event_id, "user_id": current_user["_id"], "user_name": current_user.get("first_name", ""), "content": message.content, "timestamp": datetime.utcnow()}
-    result = await db.messages.insert_one(msg_doc)
-    return {"id": str(result.inserted_id), "message": "Sent"}
+@app.get("/api/events/{event_id}/messages")
+async def get_messages(event_id: str, current_user: dict = Depends(get_current_user)):
+    messages = await db.messages.find({"event_id": event_id}).sort("timestamp", 1).to_list(100)
+    result = []
+    for m in messages:
+        # Get sender info
+        sender = await db.users.find_one({"_id": m["user_id"]})
+        result.append({
+            "message_id": str(m["_id"]),
+            "sender_id": m["user_id"],
+            "sender_name": m.get("user_name", ""),
+            "sender_photo": sender.get("photo") if sender else None,
+            "content": m["content"],
+            "created_at": m["timestamp"].isoformat()
+        })
+    return result
 
 @app.get("/api/chats")
 async def get_chats(current_user: dict = Depends(get_current_user)):
