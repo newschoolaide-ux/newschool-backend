@@ -312,10 +312,10 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         raise HTTPException(status_code=403, detail="No create credits left")
     event_id = generate_event_id()
     start_time = datetime.utcnow()
-if event.duration_days and event.duration_days > 0:
-    end_time = start_time + timedelta(days=event.duration_days)
-else:
-    end_time = start_time + timedelta(hours=event.duration_hours or 2)
+    if event.duration_days and event.duration_days > 0:
+        end_time = start_time + timedelta(days=event.duration_days)
+    else:
+        end_time = start_time + timedelta(hours=event.duration_hours or 2)
     address = event.location_name or event.address or ""
     photo_data = event.photo or event.photo_base64
     event_doc = {
@@ -561,7 +561,7 @@ async def get_messages(event_id: str, current_user: dict = Depends(get_current_u
             "created_at": m["timestamp"].isoformat(),
             "is_read": True
         })
-
+    return result
 @app.get("/api/chats")
 async def get_chats(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"participants": current_user["_id"]}).to_list(50)
