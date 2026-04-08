@@ -77,6 +77,12 @@ class AppleAuthRequest(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     user_identifier: str
+class ProfileUpdate(BaseModel):
+    first_name: Optional[str] = None
+    bio: Optional[str] = None
+    phone: Optional[str] = None
+    photo: Optional[str] = None
+    languages: Optional[List[str]] = []
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -276,7 +282,29 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "create_credit": current_user.get("create_credit", 1),
         "join_credit": current_user.get("join_credit", 3)
     }
-
+@app.put("/api/users/profile")
+async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_current_user)):
+    """Update user profile"""
+    update_data = {}
+    
+    if data.first_name is not None:
+        update_data["first_name"] = data.first_name
+    if data.bio is not None:
+        update_data["bio"] = data.bio
+    if data.phone is not None:
+        update_data["phone"] = data.phone
+    if data.photo is not None:
+        update_data["photo"] = data.photo
+    if data.languages is not None:
+        update_data["languages"] = data.languages
+    
+    if update_data:
+        await db.users.update_one(
+            {"_id": current_user["_id"]},
+            {"$set": update_data}
+        )
+    
+    return {"message": "Profile updated successfully"}
 @app.post("/api/events")
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
     if current_user.get("create_credit", 0) <= 0:
