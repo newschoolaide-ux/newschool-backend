@@ -538,27 +538,25 @@ async def get_user_joined_events(current_user: dict = Depends(get_current_user))
     events = await db.events.find({"participants": current_user["_id"]}).to_list(50)
     return [{"id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "participants": len(e.get("participants", []))} for e in events]
 
-@app.get("/api/events/{event_id}/messages")
-async def get_messages(event_id: str, current_user: dict = Depends(get_current_user)):
-    messages = await db.messages.find({"event_id": event_id}).sort("timestamp", 1).to_list(100)
-    return [{"id": str(m["_id"]), "user_id": m["user_id"], "user_name": m.get("user_name", ""), "content": m["content"], "timestamp": m["timestamp"].isoformat()} for m in messages]
+
 
 @app.get("/api/events/{event_id}/messages")
 async def get_messages(event_id: str, current_user: dict = Depends(get_current_user)):
     messages = await db.messages.find({"event_id": event_id}).sort("timestamp", 1).to_list(100)
     result = []
     for m in messages:
-        # Get sender info
         sender = await db.users.find_one({"_id": m["user_id"]})
         result.append({
             "message_id": str(m["_id"]),
+            "event_id": event_id,
             "sender_id": m["user_id"],
             "sender_name": m.get("user_name", ""),
             "sender_photo": sender.get("photo") if sender else None,
             "content": m["content"],
-            "created_at": m["timestamp"].isoformat()
+            "message_type": "text",
+            "created_at": m["timestamp"].isoformat(),
+            "is_read": True
         })
-    return result
 
 @app.get("/api/chats")
 async def get_chats(current_user: dict = Depends(get_current_user)):
