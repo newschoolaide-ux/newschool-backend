@@ -58,6 +58,7 @@ class EventCreate(BaseModel):
     address: Optional[str] = ""
     max_participants: Optional[int] = 50
     duration_hours: Optional[int] = 2
+    duration_days: Optional[int] = 1
     theme: Optional[str] = None
     gender_filter: Optional[str] = "all"
     age_ranges: Optional[List[str]] = []
@@ -311,6 +312,9 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         raise HTTPException(status_code=403, detail="No create credits left")
     event_id = generate_event_id()
     start_time = datetime.utcnow()
+if event.duration_days and event.duration_days > 0:
+    end_time = start_time + timedelta(days=event.duration_days)
+else:
     end_time = start_time + timedelta(hours=event.duration_hours or 2)
     address = event.location_name or event.address or ""
     photo_data = event.photo or event.photo_base64
