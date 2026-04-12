@@ -11,6 +11,7 @@ from bson import ObjectId
 import os
 import secrets
 import logging
+import httpx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -111,6 +112,26 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+async def send_push_notification(push_token: str, title: str, body: str, data: dict = None):
+    """Send push notification via Expo"""
+    try:
+        message = {
+            "to": push_token,
+            "sound": "default",
+            "title": title,
+            "body": body,
+        }
+        if data:
+            message["data"] = data
+        
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                "https://exp.host/--/api/v2/push/send",
+                json=message,
+                headers={"Content-Type": "application/json"}
+            )
+    except Exception as e:
+        logger.error(f"Failed to send push notification: {e}")
 
 def generate_event_id():
     return f"event_{secrets.token_hex(6)}"
@@ -299,6 +320,27 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
         "languages": user.get("languages", []),
         "created_at": user.get("created_at").isoformat() if user.get("created_at") else None
     }
+class PushTokenRequest(BaseModel):
+    push_token: str
+
+@app.post("/api/users/push-token")
+async def save_push_token(data: PushTokenRequest, current_user: dict = Depends(get_current_user)):
+    """Save user's push notification token"""
+    await db.users.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {"push_token": data.push_token}}
+    )
+    return {"message": "Push token saved"}
+
+@app.delete("/api/users/push-token")
+async def delete_push_token(current_user: dict = Depends(get_current_user)):
+    """Remove user's push notification token"""
+    await db.users.update_one(
+        {"_id": current_user["_id"]},
+        {"$unset": {"push_token": ""}}
+    )
+    return {"message": "Push token removed"}
+
 @app.put("/api/users/profile")
 async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_current_user)):
     """Update user profile"""
@@ -540,8 +582,17 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
     
     await db.events.update_one({"_id": event_id}, {"$push": {"participants": current_user["_id"]}})
     await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"join_credit": -1}})
-    return {"message": "Joined successfully"}
-
+    
+    # Send push notification to event creator
+    creator = await db.users.find_one({"_id": event["creator_id"]})
+    if creator and creator.get("push_token"):
+        await send_push_notification(
+            push_token=creator["push_token"],
+            title="Nouveau participant ! 🎉",
+            body=f"{current_user.get('first_name', 'Quelqu\'un')} a rejoint votre événement \"{event['name']}\"",
+            data={"event_id": event_id}
+        )
+    
 @app.post("/api/events/{event_id}/leave")
 async def leave_event(event_id: str, current_user: dict = Depends(get_current_user)):
     event = await db.events.find_one({"_id": event_id})
