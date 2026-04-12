@@ -583,6 +583,43 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
     await db.events.update_one({"_id": event_id}, {"$set": update_data})
     
     return {"message": "Event updated successfully"}
+
+@app.put("/api/events/{event_id}")
+async def update_event(event_id: str, event_data: dict, current_user: dict = Depends(get_current_user)):
+    """Update an event (creator only)"""
+    event = await db.events.find_one({"_id": event_id})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    if event["creator_id"] != current_user["_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    allowed_fields = [
+        "name", "description", "location_name", "latitude", "longitude",
+        "max_participants", "duration_hours", "desired_nationalities",
+        "theme", "photo", "gender_filter", "age_ranges"
+    ]
+    
+    update_data = {k: v for k, v in event_data.items() if k in allowed_fields and v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    
+    if "max_participants" in update_data:
+        current_participants = len(event.get("participants", []))
+        if update_data["max_participants"] < current_participants:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot set max_participants below current participant count ({current_participants})"
+            )
+    
+    await db.events.update_one(
+        {"_id": event_id},
+        {"$set": update_data}
+    )
+    
+    updated_event = await db.events.find_one({"_id": event_id})
+    return updated_event
 @app.delete("/api/events/{event_id}")
 async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
     event = await db.events.find_one({"_id": event_id})
