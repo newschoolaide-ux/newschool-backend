@@ -84,6 +84,7 @@ class ProfileUpdate(BaseModel):
     phone: Optional[str] = None
     photo: Optional[str] = None
     languages: Optional[List[str]] = []
+    gender: Optional[str] = None
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -313,7 +314,8 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
         update_data["photo"] = data.photo
     if data.languages is not None:
         update_data["languages"] = data.languages
-    
+    if data.gender is not None:
+        update_data["gender"] = data.gender
     if update_data:
         await db.users.update_one(
             {"_id": current_user["_id"]},
