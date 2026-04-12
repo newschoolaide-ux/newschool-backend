@@ -523,6 +523,19 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Event is full")
     if current_user.get("join_credit", 0) <= 0:
         raise HTTPException(status_code=403, detail="No join credits left")
+    
+    # Check gender filter
+    gender_filter = event.get("gender_filter", "all")
+    user_gender = current_user.get("gender")
+    
+    if gender_filter != "all":
+        if not user_gender:
+            raise HTTPException(status_code=403, detail="Please set your gender in your profile to join this event")
+        if gender_filter == "women" and user_gender != "female":
+            raise HTTPException(status_code=403, detail="This event is for women only")
+        if gender_filter == "men" and user_gender != "male":
+            raise HTTPException(status_code=403, detail="This event is for men only")
+    
     await db.events.update_one({"_id": event_id}, {"$push": {"participants": current_user["_id"]}})
     await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"join_credit": -1}})
     return {"message": "Joined successfully"}
