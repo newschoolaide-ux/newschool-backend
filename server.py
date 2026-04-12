@@ -551,7 +551,38 @@ async def leave_event(event_id: str, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=400, detail="Creator cannot leave")
     await db.events.update_one({"_id": event_id}, {"$pull": {"participants": current_user["_id"]}})
     return {"message": "Left successfully"}
-
+@app.put("/api/events/{event_id}")
+async def update_event(event_id: str, event: EventCreate, current_user: dict = Depends(get_current_user)):
+    existing_event = await db.events.find_one({"_id": event_id})
+    if not existing_event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if existing_event["creator_id"] != current_user["_id"]:
+        raise HTTPException(status_code=403, detail="Only the creator can edit this event")
+    
+    address = event.location_name or event.address or ""
+    photo_data = event.photo or event.photo_base64
+    
+    update_data = {
+        "name": event.name,
+        "description": event.description,
+        "location": {"type": "Point", "coordinates": [event.longitude, event.latitude]},
+        "address": address,
+        "max_participants": event.max_participants or 50,
+        "theme": event.theme,
+        "gender_filter": event.gender_filter or "all",
+        "age_ranges": event.age_ranges or [],
+        "desired_nationalities": event.desired_nationalities or [],
+    }
+    
+    if photo_data:
+        update_data["photo_base64"] = photo_data
+    
+    if event.duration_days and event.duration_days > 0:
+        update_data["end_time"] = existing_event["start_time"] + timedelta(days=event.duration_days)
+    
+    await db.events.update_one({"_id": event_id}, {"$set": update_data})
+    
+    return {"message": "Event updated successfully"}
 @app.delete("/api/events/{event_id}")
 async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
     event = await db.events.find_one({"_id": event_id})
