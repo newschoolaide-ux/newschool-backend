@@ -281,7 +281,22 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "gender": current_user.get("gender"),
         "birth_year": current_user.get("birth_year"),
         "create_credit": current_user.get("create_credit", 1),
-        "join_credit": current_user.get("join_credit", 3)
+        "join_credit": current_user.get("join_credit", 3),
+        "created_at": current_user.get("created_at").isoformat() if current_user.get("created_at") else None
+    }
+@app.get("/api/users/{user_id}")
+async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Get another user's public profile"""
+    user = await db.users.find_one({"_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "user_id": user["_id"],
+        "first_name": user.get("first_name", ""),
+        "photo": user.get("photo"),
+        "bio": user.get("bio", ""),
+        "languages": user.get("languages", []),
+        "created_at": user.get("created_at").isoformat() if user.get("created_at") else None
     }
 @app.put("/api/users/profile")
 async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_current_user)):
