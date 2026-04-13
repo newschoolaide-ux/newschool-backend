@@ -684,13 +684,12 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
 @app.get("/api/events/user/created")
 async def get_user_created_events(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"creator_id": current_user["_id"]}).to_list(50)
-    return [{"id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "participants": len(e.get("participants", []))} for e in events]
+    return [{"event_id": e["_id"], "id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "current_participants": len(e.get("participants", [])), "max_participants": e.get("max_participants", 50)} for e in events]
 
 @app.get("/api/events/user/joined")
 async def get_user_joined_events(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"participants": current_user["_id"]}).to_list(50)
-    return [{"id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "participants": len(e.get("participants", []))} for e in events]
-
+    return [{"event_id": e["_id"], "id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "current_participants": len(e.get("participants", [])), "max_participants": e.get("max_participants", 50)} for e in events]
 
 
 @app.get("/api/events/{event_id}/messages")
