@@ -589,7 +589,7 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
         await send_push_notification(
             push_token=creator["push_token"],
             title="Nouveau participant ! 🎉",
-            body=f"{current_user.get('first_name', 'Quelqu\'un')} a rejoint votre événement \"{event['name']}\"",
+            body=f"{current_user.get('first_name', 'Quelqu un')} a rejoint votre événement {event['name']}",
             data={"event_id": event_id}
         )
     
