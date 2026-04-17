@@ -90,6 +90,7 @@ class ProfileUpdate(BaseModel):
     photo: Optional[str] = None
     languages: Optional[List[str]] = []
     gender: Optional[str] = None
+    birth_year: Optional[int] = None
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -392,9 +393,13 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "subscription_tier": current_user.get("subscription_tier", "free"),
         "gender": current_user.get("gender"),
         "birth_year": current_user.get("birth_year"),
+        "languages": current_user.get("languages", []),
+        "bio": current_user.get("bio", ""),
+        "photo": current_user.get("photo"),
         "create_credit": current_user.get("create_credit", 1),
         "join_credit": current_user.get("join_credit", 3),
         "created_at": current_user.get("created_at").isoformat() if current_user.get("created_at") else None
+    
     }
 @app.get("/api/users/{user_id}")
 async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
@@ -448,6 +453,8 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
         update_data["languages"] = data.languages
     if data.gender is not None:
         update_data["gender"] = data.gender
+    if data.birth_year is not None:
+        update_data["birth_year"] = data.birth_year
     if update_data:
         await db.users.update_one(
             {"_id": current_user["_id"]},
