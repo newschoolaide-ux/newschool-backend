@@ -190,6 +190,41 @@ async def send_welcome_email(to_email: str, first_name: str):
             server.sendmail(email_address, to_email, msg.as_string())
     except Exception as e:
         print(f"Email error: {e}")
+    await send_welcome_email(user.email, user.first_name)
+Remplacez-la par :
+    await send_welcome_email(user.email, user.first_name)
+    await send_admin_notification(user.email, user.first_name)
+Puis ajoutez cette nouvelle fonction après send_welcome_email :
+async def send_admin_notification(user_email: str, first_name: str):
+    try:
+        email_address = os.getenv("EMAIL_ADDRESS")
+        email_password = os.getenv("EMAIL_PASSWORD")
+        
+        if not email_address or not email_password:
+            return
+        
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = f"🆕 Nouvelle inscription : {first_name}"
+        msg['From'] = f"New School <{email_address}>"
+        msg['To'] = email_address
+        
+        html = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2>🎉 Nouvelle inscription sur New School !</h2>
+            <p><strong>Prénom :</strong> {first_name}</p>
+            <p><strong>Email :</strong> {user_email}</p>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(html, 'html'))
+        
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(email_address, email_password)
+            server.sendmail(email_address, email_address, msg.as_string())
+    except Exception as e:
+        print(f"Admin notification error: {e}")
 
 
 @app.post("/api/auth/register")
@@ -216,6 +251,7 @@ async def register(user: UserCreate):
     }
     await db.users.insert_one(user_doc)
     await send_welcome_email(user.email, user.first_name)
+    await send_admin_notification(user.email, user.first_name)
     token = create_access_token({"sub": user_id})
     return {
         "access_token": token,
