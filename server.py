@@ -191,10 +191,8 @@ async def send_welcome_email(to_email: str, first_name: str):
     except Exception as e:
         print(f"Email error: {e}")
     await send_welcome_email(user.email, user.first_name)
-Remplacez-la par :
-    await send_welcome_email(user.email, user.first_name)
     await send_admin_notification(user.email, user.first_name)
-Puis ajoutez cette nouvelle fonction après send_welcome_email :
+
 async def send_admin_notification(user_email: str, first_name: str):
     try:
         email_address = os.getenv("EMAIL_ADDRESS")
