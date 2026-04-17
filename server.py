@@ -725,6 +725,19 @@ async def send_message(event_id: str, message: MessageCreate, current_user: dict
         "timestamp": datetime.utcnow()
     }
     result = await db.messages.insert_one(msg_doc)
+    
+    # Send push notification to all participants except sender
+    for participant_id in event.get("participants", []):
+        if participant_id != current_user["_id"]:
+            participant = await db.users.find_one({"_id": participant_id})
+            if participant and participant.get("push_token"):
+                await send_push_notification(
+                    push_token=participant["push_token"],
+                    title=f"Nouveau message dans {event['name']}",
+                    body=f"{current_user.get('first_name', 'Quelqu un')}: {message.content[:50]}",
+                    data={"event_id": event_id}
+                )
+    
     return {
         "message_id": str(result.inserted_id),
         "event_id": event_id,
@@ -736,6 +749,7 @@ async def send_message(event_id: str, message: MessageCreate, current_user: dict
         "created_at": datetime.utcnow().isoformat(),
         "is_read": False
     }
+
 @app.get("/api/chats")
 async def get_chats(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"participants": current_user["_id"]}).to_list(50)
