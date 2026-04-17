@@ -190,8 +190,7 @@ async def send_welcome_email(to_email: str, first_name: str):
             server.sendmail(email_address, to_email, msg.as_string())
     except Exception as e:
         print(f"Email error: {e}")
-    await send_welcome_email(user.email, user.first_name)
-    await send_admin_notification(user.email, user.first_name)
+    
 
 async def send_admin_notification(user_email: str, first_name: str):
     try:
