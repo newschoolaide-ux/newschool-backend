@@ -8,10 +8,14 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional, List
 from bson import ObjectId
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
 import secrets
 import logging
 import httpx
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -135,6 +139,58 @@ async def send_push_notification(push_token: str, title: str, body: str, data: d
 
 def generate_event_id():
     return f"event_{secrets.token_hex(6)}"
+async def send_welcome_email(to_email: str, first_name: str):
+    try:
+        email_address = os.getenv("EMAIL_ADDRESS")
+        email_password = os.getenv("EMAIL_PASSWORD")
+        
+        if not email_address or not email_password:
+            return
+        
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = "Bienvenue sur New School ! 🎉"
+        msg['From'] = f"New School <{email_address}>"
+        msg['To'] = to_email
+        
+        html = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
+            <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
+                <h1 style="color: #D946EF;">🎉 Bienvenue {first_name} !</h1>
+                <p style="color: #CCCCCC; font-size: 16px;">Nous sommes ravis de t accueillir dans la communaute <strong style="color: #D946EF;">New School</strong> ! 🚀</p>
+                
+                <h2 style="color: #FFFFFF;">✨ Ce que tu peux faire :</h2>
+                <ul style="color: #CCCCCC; font-size: 15px; line-height: 2;">
+                    <li>🗺️ <strong>Explorer</strong> les evenements pres de toi</li>
+                    <li>🎯 <strong>Creer</strong> tes propres evenements</li>
+                    <li>💬 <strong>Discuter</strong> avec les participants</li>
+                    <li>👥 <strong>Rencontrer</strong> de nouvelles personnes</li>
+                </ul>
+                
+                <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; margin-top: 30px;">
+                    <h3 style="color: #D946EF; margin-top: 0;">🎁 Ton abonnement : Gratuit</h3>
+                    <p style="color: #CCCCCC; margin-bottom: 0;">Tu peux creer <strong>1 evenement</strong> et rejoindre <strong>3 evenements</strong> par mois. Passe a Premium pour des creations illimitees ! 💎</p>
+                </div>
+                
+                <p style="color: #CCCCCC; font-size: 16px; margin-top: 30px;">A tres vite sur New School ! 🙌</p>
+                
+                <p style="color: #888888; font-size: 14px; margin-top: 40px; border-top: 1px solid #333; padding-top: 20px;">
+                    💜 L equipe New School<br>
+                    📧 newschoolaide@gmail.com
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(html, 'html'))
+        
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(email_address, email_password)
+            server.sendmail(email_address, to_email, msg.as_string())
+    except Exception as e:
+        print(f"Email error: {e}")
+
 
 @app.post("/api/auth/register")
 async def register(user: UserCreate):
@@ -159,6 +215,7 @@ async def register(user: UserCreate):
         "created_at": datetime.utcnow()
     }
     await db.users.insert_one(user_doc)
+    await send_welcome_email(user.email, user.first_name)
     token = create_access_token({"sub": user_id})
     return {
         "access_token": token,
