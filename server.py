@@ -794,6 +794,67 @@ async def health():
 async def root():
     return {"message": "New School API is running"}
 
+# Admin endpoints
+@app.get("/api/admin/stats")
+async def get_admin_stats(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    users_count = await db.users.count_documents({})
+    events_count = await db.events.count_documents({})
+    active_events = await db.events.count_documents({"end_time": {"$gte": datetime.utcnow()}})
+    messages_count = await db.messages.count_documents({})
+    
+    # Subscription stats
+    free_count = await db.users.count_documents({"subscription_tier": "free"})
+    standard_count = await db.users.count_documents({"subscription_tier": "standard"})
+    ambassador_count = await db.users.count_documents({"subscription_tier": "ambassador"})
+    
+    return {
+        "users_count": users_count,
+        "events_count": events_count,
+        "active_events": active_events,
+        "messages_count": messages_count,
+        "subscriptions": {
+            "free": free_count,
+            "standard": standard_count,
+            "ambassador": ambassador_count
+        }
+    }
+
+@app.get("/api/admin/users")
+async def get_admin_users(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    users = await db.users.find({}).to_list(500)
+    return [{
+        "user_id": u["_id"],
+        "email": u.get("email", ""),
+        "first_name": u.get("first_name", ""),
+        "subscription_tier": u.get("subscription_tier", "free"),
+        "is_banned": u.get("is_banned", False),
+        "created_at": u.get("created_at").isoformat() if u.get("created_at") else None
+    } for u in users]
+
+@app.get("/api/admin/reports")
+async def get_admin_reports(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    
+    reports = await db.reports.find({}).sort("created_at", -1).to_list(100)
+    return [{
+        "report_id": str(r["_id"]),
+        "reporter_id": r.get("reporter_id"),
+        "reported_user_id": r.get("reported_user_id"),
+        "event_id": r.get("event_id"),
+        "reason": r.get("reason", ""),
+        "status": r.get("status", "pending"),
+        "created_at": r.get("created_at").isoformat() if r.get("created_at") else None
+    } for r in reports]
+
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
