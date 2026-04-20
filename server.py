@@ -145,7 +145,12 @@ async def send_welcome_email(to_email: str, first_name: str):
         email_address = os.getenv("EMAIL_ADDRESS")
         email_password = os.getenv("EMAIL_PASSWORD")
         
+        logger.info(f"Attempting to send email to {to_email}")
+        logger.info(f"EMAIL_ADDRESS configured: {bool(email_address)}")
+        logger.info(f"EMAIL_PASSWORD configured: {bool(email_password)}")
+        
         if not email_address or not email_password:
+            logger.error("Email credentials not configured!")
             return
         
         msg = MIMEMultipart('alternative')
