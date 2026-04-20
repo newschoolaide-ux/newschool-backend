@@ -379,6 +379,7 @@ async def forgot_password(data: dict):
         
         print(f"=== EMAIL_ADDRESS: {email_address} ===")
         print(f"=== EMAIL_PASSWORD set: {bool(email_password)} ===")
+        print(f"=== FORGOT PASSWORD request for: {email} ===", flush=True)
         
         if not email_address or not email_password:
             logger.error("Email credentials missing!")
@@ -1031,7 +1032,14 @@ async def get_user_history(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok"}
+    print("=== HEALTH CHECK ===", flush=True)
+    email_address = os.getenv("EMAIL_ADDRESS")
+    email_password = os.getenv("EMAIL_PASSWORD")
+    return {
+        "status": "ok",
+        "email_configured": bool(email_address),
+        "password_configured": bool(email_password)
+    }
 
 @app.get("/")
 async def root():
