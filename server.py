@@ -145,9 +145,9 @@ async def send_welcome_email(to_email: str, first_name: str):
         email_address = os.getenv("EMAIL_ADDRESS")
         email_password = os.getenv("EMAIL_PASSWORD")
         
-        logger.info(f"Attempting to send email to {to_email}")
-        logger.info(f"EMAIL_ADDRESS configured: {bool(email_address)}")
-        logger.info(f"EMAIL_PASSWORD configured: {bool(email_password)}")
+        logger.info(f"WELCOME EMAIL - Sending to: {to_email}")
+        logger.info(f"EMAIL_ADDRESS: {email_address}")
+        logger.info(f"EMAIL_PASSWORD set: {bool(email_password)}")
         
         if not email_address or not email_password:
             logger.error("Email credentials not configured!")
@@ -350,36 +350,75 @@ async def forgot_password(data: dict):
     
     return {"message": "If this email exists, a reset link has been sent", "token": reset_token[:8].upper()}
 
-@app.post("/api/auth/reset-password")
-async def reset_password(data: dict):
-    token = data.get("token", "").lower()
-    new_password = data.get("new_password")
+@app.post("/api/auth/forgot-password")
+async def forgot_password(data: dict):
+    email = data.get("email")
+    logger.info(f"FORGOT PASSWORD request for: {email}")
     
-    if not token or not new_password:
-        raise HTTPException(status_code=400, detail="Token and new password required")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
     
-    # Find user with this token (check first 8 chars)
-    user = await db.users.find_one({
-        "reset_token_expires": {"$gte": datetime.utcnow()}
-    })
-    
+    user = await db.users.find_one({"email": email})
     if not user:
-        raise HTTPException(status_code=400, detail="Invalid or expired token")
+        logger.info(f"User not found: {email}")
+        return {"message": "If this email exists, a reset link has been sent"}
     
-    # Verify token matches (first 8 chars)
-    if not user.get("reset_token", "")[:8].upper() == token.upper():
-        raise HTTPException(status_code=400, detail="Invalid token")
+    logger.info(f"User found, generating reset token...")
     
-    # Update password
+    reset_token = secrets.token_urlsafe(32)
+    expires = datetime.utcnow() + timedelta(hours=1)
+    
     await db.users.update_one(
         {"_id": user["_id"]},
-        {
-            "$set": {"password_hash": get_password_hash(new_password)},
-            "$unset": {"reset_token": "", "reset_token_expires": ""}
-        }
+        {"$set": {"reset_token": reset_token, "reset_token_expires": expires}}
     )
     
-    return {"message": "Password reset successfully"}
+    try:
+        email_address = os.getenv("EMAIL_ADDRESS")
+        email_password = os.getenv("EMAIL_PASSWORD")
+        
+        logger.info(f"EMAIL_ADDRESS: {email_address}")
+        logger.info(f"EMAIL_PASSWORD set: {bool(email_password)}")
+        
+        if not email_address or not email_password:
+            logger.error("Email credentials missing!")
+            return {"message": "If this email exists, a reset link has been sent"}
+        
+        logger.info("Sending reset email...")
+        
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = "Code de reinitialisation - New School"
+        msg['From'] = f"New School <{email_address}>"
+        msg['To'] = email
+        
+        html = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
+            <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
+                <h1 style="color: #D946EF;">Reinitialisation de mot de passe</h1>
+                <p style="color: #CCCCCC;">Votre code est :</p>
+                <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; text-align: center;">
+                    <h2 style="color: #D946EF; letter-spacing: 3px;">{reset_token[:8].upper()}</h2>
+                </div>
+                <p style="color: #888;">Ce code expire dans 1 heure.</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        msg.attach(MIMEText(html, 'html'))
+        
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(email_address, email_password)
+            server.sendmail(email_address, email, msg.as_string())
+        
+        logger.info(f"Reset email sent successfully to {email}!")
+        
+    except Exception as e:
+        logger.error(f"Reset email error: {e}")
+    
+    return {"message": "If this email exists, a reset link has been sent"}
+
 
 @app.post("/api/auth/apple")
 async def apple_auth(data: AppleAuthRequest):
