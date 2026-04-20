@@ -136,7 +136,7 @@ async def send_push_notification(push_token: str, title: str, body: str, data: d
                 headers={"Content-Type": "application/json"}
             )
     except Exception as e:
-        logger.error(f"Failed to send push notification: {e}")
+        logger.error(f"Email error: {e}")
 
 def generate_event_id():
     return f"event_{secrets.token_hex(6)}"
@@ -288,6 +288,94 @@ async def login(user: UserLogin):
             "subscription_tier": db_user.get("subscription_tier", "free")
         }
     }
+@app.post("/api/auth/forgot-password")
+async def forgot_password(data: dict):
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+    
+    user = await db.users.find_one({"email": email})
+    if not user:
+        # Don't reveal if email exists
+        return {"message": "If this email exists, a reset link has been sent"}
+    
+    # Generate reset token
+    reset_token = secrets.token_urlsafe(32)
+    expires = datetime.utcnow() + timedelta(hours=1)
+    
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"reset_token": reset_token, "reset_token_expires": expires}}
+    )
+    
+    # Send reset email
+    try:
+        email_address = os.getenv("EMAIL_ADDRESS")
+        email_password = os.getenv("EMAIL_PASSWORD")
+        
+        if email_address and email_password:
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = "Réinitialisation de mot de passe - New School"
+            msg['From'] = f"New School <{email_address}>"
+            msg['To'] = email
+            
+            html = f"""
+            <html>
+            <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
+                <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
+                    <h1 style="color: #D946EF;">🔐 Réinitialisation de mot de passe</h1>
+                    <p style="color: #CCCCCC;">Votre code de réinitialisation est :</p>
+                    <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; text-align: center; margin: 20px 0;">
+                        <h2 style="color: #D946EF; margin: 0; letter-spacing: 3px;">{reset_token[:8].upper()}</h2>
+                    </div>
+                    <p style="color: #888;">Ce code expire dans 1 heure.</p>
+                    <p style="color: #888; font-size: 12px;">Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>
+                </div>
+            </body>
+            </html>
+            """
+            
+            msg.attach(MIMEText(html, 'html'))
+            
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(email_address, email_password)
+                server.sendmail(email_address, email, msg.as_string())
+    except Exception as e:
+        logger.error(f"Reset email error: {e}")
+    
+    return {"message": "If this email exists, a reset link has been sent", "token": reset_token[:8].upper()}
+
+@app.post("/api/auth/reset-password")
+async def reset_password(data: dict):
+    token = data.get("token", "").lower()
+    new_password = data.get("new_password")
+    
+    if not token or not new_password:
+        raise HTTPException(status_code=400, detail="Token and new password required")
+    
+    # Find user with this token (check first 8 chars)
+    user = await db.users.find_one({
+        "reset_token_expires": {"$gte": datetime.utcnow()}
+    })
+    
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    
+    # Verify token matches (first 8 chars)
+    if not user.get("reset_token", "")[:8].upper() == token.upper():
+        raise HTTPException(status_code=400, detail="Invalid token")
+    
+    # Update password
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {"password_hash": get_password_hash(new_password)},
+            "$unset": {"reset_token": "", "reset_token_expires": ""}
+        }
+    )
+    
+    return {"message": "Password reset successfully"}
+
 @app.post("/api/auth/apple")
 async def apple_auth(data: AppleAuthRequest):
     """Authenticate with Apple Sign In"""
