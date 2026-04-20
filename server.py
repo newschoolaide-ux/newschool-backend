@@ -8,13 +8,11 @@ from jose import JWTError, jwt
 from datetime import datetime, timedelta
 from typing import Optional, List
 from bson import ObjectId
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
 import secrets
 import logging
 import httpx
+import random
 
 
 logging.basicConfig(level=logging.INFO)
@@ -141,94 +139,97 @@ async def send_push_notification(push_token: str, title: str, body: str, data: d
 def generate_event_id():
     return f"event_{secrets.token_hex(6)}"
 async def send_welcome_email(to_email: str, first_name: str):
-    try:
-        email_address = os.getenv("EMAIL_ADDRESS")
-        email_password = os.getenv("EMAIL_PASSWORD")
-        
-        logger.info(f"WELCOME EMAIL - Sending to: {to_email}")
-        logger.info(f"EMAIL_ADDRESS: {email_address}")
-        logger.info(f"EMAIL_PASSWORD set: {bool(email_password)}")
-        
-        if not email_address or not email_password:
-            logger.error("Email credentials not configured!")
-            return
-        
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = "Bienvenue sur New School ! 🎉"
-        msg['From'] = f"New School <{email_address}>"
-        msg['To'] = to_email
-        
-        html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
-                <h1 style="color: #D946EF;">🎉 Bienvenue {first_name} !</h1>
-                <p style="color: #CCCCCC; font-size: 16px;">Nous sommes ravis de t accueillir dans la communaute <strong style="color: #D946EF;">New School</strong> ! 🚀</p>
-                
-                <h2 style="color: #FFFFFF;">✨ Ce que tu peux faire :</h2>
-                <ul style="color: #CCCCCC; font-size: 15px; line-height: 2;">
-                    <li>🗺️ <strong>Explorer</strong> les evenements pres de toi</li>
-                    <li>🎯 <strong>Creer</strong> tes propres evenements</li>
-                    <li>💬 <strong>Discuter</strong> avec les participants</li>
-                    <li>👥 <strong>Rencontrer</strong> de nouvelles personnes</li>
-                </ul>
-                
-                <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; margin-top: 30px;">
-                    <h3 style="color: #D946EF; margin-top: 0;">🎁 Ton abonnement : Gratuit</h3>
-                    <p style="color: #CCCCCC; margin-bottom: 0;">Tu peux creer <strong>1 evenement</strong> et rejoindre <strong>3 evenements</strong> par mois. Passe a Premium pour des creations illimitees ! 💎</p>
-                </div>
-                
-                <p style="color: #CCCCCC; font-size: 16px; margin-top: 30px;">A tres vite sur New School ! 🙌</p>
-                
-                <p style="color: #888888; font-size: 14px; margin-top: 40px; border-top: 1px solid #333; padding-top: 20px;">
-                    💜 L equipe New School<br>
-                    📧 newschoolaide@gmail.com
-                </p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        msg.attach(MIMEText(html, 'html'))
-        
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(email_address, email_password)
-            server.sendmail(email_address, to_email, msg.as_string())
-    except Exception as e:
-        print(f"Email error: {e}")
+    """Send welcome email via Resend API"""
+    resend_api_key = os.getenv("RESEND_API_KEY")
     
+    if not resend_api_key:
+        logger.error("RESEND_API_KEY not configured!")
+        return
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "from": "New School <onboarding@resend.dev>",
+                    "to": [to_email],
+                    "subject": "Bienvenue sur New School ! 🎉",
+                    "html": f"""
+                    <html>
+                    <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
+                        <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
+                            <h1 style="color: #D946EF;">🎉 Bienvenue {first_name} !</h1>
+                            <p style="color: #CCCCCC; font-size: 16px;">Nous sommes ravis de t'accueillir dans la communauté <strong style="color: #D946EF;">New School</strong> !</p>
+                            
+                            <h2 style="color: #FFFFFF;">✨ Ce que tu peux faire :</h2>
+                            <ul style="color: #CCCCCC; font-size: 15px; line-height: 2;">
+                                <li>🗺️ <strong>Explorer</strong> les événements près de toi</li>
+                                <li>🎯 <strong>Créer</strong> tes propres événements</li>
+                                <li>💬 <strong>Discuter</strong> avec les participants</li>
+                                <li>👥 <strong>Rencontrer</strong> de nouvelles personnes</li>
+                            </ul>
+                            
+                            <p style="color: #888888; font-size: 14px; margin-top: 40px; border-top: 1px solid #333; padding-top: 20px;">
+                                💜 L'équipe New School<br>
+                                📧 newschoolaide@gmail.com
+                            </p>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                }
+            )
+            if response.status_code == 200:
+                logger.info(f"Welcome email sent to {to_email}")
+            else:
+                logger.error(f"Resend error: {response.text}")
+    except Exception as e:
+        logger.error(f"Email error: {e}")
+
+
+
 
 async def send_admin_notification(user_email: str, first_name: str):
+    """Send admin notification via Resend API"""
+    resend_api_key = os.getenv("RESEND_API_KEY")
+    
+    if not resend_api_key:
+        return
+    
     try:
-        email_address = os.getenv("EMAIL_ADDRESS")
-        email_password = os.getenv("EMAIL_PASSWORD")
-        
-        if not email_address or not email_password:
-            return
-        
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = f"🆕 Nouvelle inscription : {first_name}"
-        msg['From'] = f"New School <{email_address}>"
-        msg['To'] = email_address
-        
-        html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2>🎉 Nouvelle inscription sur New School !</h2>
-            <p><strong>Prénom :</strong> {first_name}</p>
-            <p><strong>Email :</strong> {user_email}</p>
-        </body>
-        </html>
-        """
-        
-        msg.attach(MIMEText(html, 'html'))
-        
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(email_address, email_password)
-            server.sendmail(email_address, email_address, msg.as_string())
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {resend_api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "from": "New School <onboarding@resend.dev>",
+                    "to": ["newschoolaide@gmail.com"],
+                    "subject": f"🆕 Nouvelle inscription : {first_name}",
+                    "html": f"""
+                    <html>
+                    <body style="font-family: Arial, sans-serif; padding: 20px;">
+                        <h2>🎉 Nouvelle inscription sur New School !</h2>
+                        <p><strong>Prénom :</strong> {first_name}</p>
+                        <p><strong>Email :</strong> {user_email}</p>
+                    </body>
+                    </html>
+                    """
+                }
+            )
+            if response.status_code == 200:
+                logger.info(f"Admin notification sent for {user_email}")
+            else:
+                logger.error(f"Admin notification error: {response.text}")
     except Exception as e:
-        print(f"Admin notification error: {e}")
-
+        logger.error(f"Admin notification error: {e}")
+ 
 
 @app.post("/api/auth/register")
 async def register(user: UserCreate):
@@ -295,130 +296,95 @@ async def login(user: UserLogin):
     }
 @app.post("/api/auth/forgot-password")
 async def forgot_password(data: dict):
+    """Request password reset - sends 6-digit code via Resend"""
     email = data.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
     
     user = await db.users.find_one({"email": email})
     if not user:
-        # Don't reveal if email exists
-        return {"message": "If this email exists, a reset link has been sent"}
+        return {"message": "Si cet email existe, un code a été envoyé"}
     
-    # Generate reset token
-    reset_token = secrets.token_urlsafe(32)
-    expires = datetime.utcnow() + timedelta(hours=1)
+    # Generate 6-digit code
+    reset_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+    expires = datetime.utcnow() + timedelta(minutes=15)
     
     await db.users.update_one(
         {"_id": user["_id"]},
-        {"$set": {"reset_token": reset_token, "reset_token_expires": expires}}
+        {"$set": {"reset_token": reset_code, "reset_token_expires": expires}}
     )
     
-    # Send reset email
-    try:
-        email_address = os.getenv("EMAIL_ADDRESS")
-        email_password = os.getenv("EMAIL_PASSWORD")
-        
-        if email_address and email_password:
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = "Réinitialisation de mot de passe - New School"
-            msg['From'] = f"New School <{email_address}>"
-            msg['To'] = email
-            
-            html = f"""
-            <html>
-            <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
-                <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
-                    <h1 style="color: #D946EF;">🔐 Réinitialisation de mot de passe</h1>
-                    <p style="color: #CCCCCC;">Votre code de réinitialisation est :</p>
-                    <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; text-align: center; margin: 20px 0;">
-                        <h2 style="color: #D946EF; margin: 0; letter-spacing: 3px;">{reset_token[:8].upper()}</h2>
-                    </div>
-                    <p style="color: #888;">Ce code expire dans 1 heure.</p>
-                    <p style="color: #888; font-size: 12px;">Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.</p>
-                </div>
-            </body>
-            </html>
-            """
-            
-            msg.attach(MIMEText(html, 'html'))
-            
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-                server.login(email_address, email_password)
-                server.sendmail(email_address, email, msg.as_string())
-    except Exception as e:
-        logger.error(f"Reset email error: {e}")
+    # Send email via Resend
+    resend_api_key = os.getenv("RESEND_API_KEY")
+    if resend_api_key:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.resend.com/emails",
+                    headers={
+                        "Authorization": f"Bearer {resend_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "from": "New School <onboarding@resend.dev>",
+                        "to": [email],
+                        "subject": "🔐 Code de réinitialisation New School",
+                        "html": f"""
+                        <html>
+                        <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
+                            <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
+                                <h1 style="color: #D946EF;">🔐 Réinitialisation de mot de passe</h1>
+                                <p style="color: #CCCCCC;">Voici ton code de vérification :</p>
+                                <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; text-align: center; margin: 20px 0;">
+                                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #D946EF;">{reset_code}</span>
+                                </div>
+                                <p style="color: #888;">Ce code expire dans 15 minutes.</p>
+                                <p style="color: #666; font-size: 12px;">Si tu n'as pas demandé cette réinitialisation, ignore cet email.</p>
+                            </div>
+                        </body>
+                        </html>
+                        """
+                    }
+                )
+                if response.status_code == 200:
+                    logger.info(f"Reset email sent to {email}")
+                else:
+                    logger.error(f"Resend error: {response.text}")
+        except Exception as e:
+            logger.error(f"Reset email error: {e}")
     
-    return {"message": "If this email exists, a reset link has been sent", "token": reset_token[:8].upper()}
-
-@app.post("/api/auth/forgot-password")
-async def forgot_password(data: dict):
+    return {"message": "Si cet email existe, un code a été envoyé"}
+@app.post("/api/auth/reset-password")
+async def reset_password(data: dict):
+    """Reset password with 6-digit code"""
     email = data.get("email")
-    print(f"=== FORGOT PASSWORD request for: {email} ===")
+    code = data.get("code")
+    new_password = data.get("new_password")
     
-    if not email:
-        raise HTTPException(status_code=400, detail="Email required")
+    if not all([email, code, new_password]):
+        raise HTTPException(status_code=400, detail="Email, code and new_password required")
     
     user = await db.users.find_one({"email": email})
     if not user:
-        logger.info(f"User not found: {email}")
-        return {"message": "If this email exists, a reset link has been sent"}
+        raise HTTPException(status_code=400, detail="Invalid email or code")
     
-    logger.info(f"User found, generating reset token...")
+    # Verify code
+    if user.get("reset_token") != code:
+        raise HTTPException(status_code=400, detail="Invalid code")
     
-    reset_token = secrets.token_urlsafe(32)
-    expires = datetime.utcnow() + timedelta(hours=1)
+    # Check expiry
+    expires = user.get("reset_token_expires")
+    if not expires or expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Code expired")
     
+    # Update password
+    hashed = get_password_hash(new_password)
     await db.users.update_one(
         {"_id": user["_id"]},
-        {"$set": {"reset_token": reset_token, "reset_token_expires": expires}}
+        {"$set": {"password_hash": hashed}, "$unset": {"reset_token": "", "reset_token_expires": ""}}
     )
     
-    try:
-        email_address = os.getenv("EMAIL_ADDRESS")
-        email_password = os.getenv("EMAIL_PASSWORD")
-        
-        print(f"=== EMAIL_ADDRESS: {email_address} ===")
-        print(f"=== EMAIL_PASSWORD set: {bool(email_password)} ===")
-        print(f"=== FORGOT PASSWORD request for: {email} ===", flush=True)
-        
-        if not email_address or not email_password:
-            logger.error("Email credentials missing!")
-            return {"message": "If this email exists, a reset link has been sent"}
-        
-        logger.info("Sending reset email...")
-        
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = "Code de reinitialisation - New School"
-        msg['From'] = f"New School <{email_address}>"
-        msg['To'] = email
-        
-        html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
-            <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
-                <h1 style="color: #D946EF;">Reinitialisation de mot de passe</h1>
-                <p style="color: #CCCCCC;">Votre code est :</p>
-                <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; text-align: center;">
-                    <h2 style="color: #D946EF; letter-spacing: 3px;">{reset_token[:8].upper()}</h2>
-                </div>
-                <p style="color: #888;">Ce code expire dans 1 heure.</p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        msg.attach(MIMEText(html, 'html'))
-        
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(email_address, email_password)
-            server.sendmail(email_address, email, msg.as_string())
-        
-        logger.info(f"Reset email sent successfully to {email}!")
-        
-    except Exception as e:
-        logger.error(f"Reset email error: {e}")
-    
-    return {"message": "If this email exists, a reset link has been sent"}
+    return {"message": "Password reset successfully"}
 
 
 @app.post("/api/auth/apple")
