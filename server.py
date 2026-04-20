@@ -353,7 +353,7 @@ async def forgot_password(data: dict):
 @app.post("/api/auth/forgot-password")
 async def forgot_password(data: dict):
     email = data.get("email")
-    logger.info(f"FORGOT PASSWORD request for: {email}")
+    print(f"=== FORGOT PASSWORD request for: {email} ===")
     
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
@@ -377,8 +377,8 @@ async def forgot_password(data: dict):
         email_address = os.getenv("EMAIL_ADDRESS")
         email_password = os.getenv("EMAIL_PASSWORD")
         
-        logger.info(f"EMAIL_ADDRESS: {email_address}")
-        logger.info(f"EMAIL_PASSWORD set: {bool(email_password)}")
+        print(f"=== EMAIL_ADDRESS: {email_address} ===")
+        print(f"=== EMAIL_PASSWORD set: {bool(email_password)} ===")
         
         if not email_address or not email_password:
             logger.error("Email credentials missing!")
