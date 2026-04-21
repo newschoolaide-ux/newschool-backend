@@ -155,7 +155,7 @@ async def send_welcome_email(to_email: str, first_name: str):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "from": "New School <onboarding@resend.dev>",
+                    "from": "New School <noreply@ab-digital1.com>",
                     "to": [to_email],
                     "subject": "Bienvenue sur New School ! 🎉",
                     "html": f"""
@@ -209,7 +209,7 @@ async def send_admin_notification(user_email: str, first_name: str):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "from": "New School <onboarding@resend.dev>",
+                    "from": "New School <noreply@ab-digital1.com>",
                     "to": ["newschoolaide@gmail.com"],
                     "subject": f"🆕 Nouvelle inscription : {first_name}",
                     "html": f"""
@@ -326,7 +326,7 @@ async def forgot_password(data: dict):
                         "Content-Type": "application/json"
                     },
                     json={
-                        "from": "New School <onboarding@resend.dev>",
+                        "from": "New School <noreply@ab-digital1.com>",
                         "to": [email],
                         "subject": "🔐 Code de réinitialisation New School",
                         "html": f"""
