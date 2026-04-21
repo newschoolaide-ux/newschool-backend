@@ -364,7 +364,7 @@ async def forgot_password(data: dict):
 @app.post("/api/auth/reset-password")
 async def reset_password(data: dict):
     """Reset password with 6-digit code"""
-    email = data.get("email")
+    email = data.get("email", "").lower().strip()
     code = data.get("code")
     new_password = data.get("new_password")
     
