@@ -298,12 +298,17 @@ async def login(user: UserLogin):
 async def forgot_password(data: dict):
     """Request password reset - sends 6-digit code via Resend"""
     email = data.get("email")
+    print(f"=== FORGOT PASSWORD FOR: {email} ===")
+    
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
     
     user = await db.users.find_one({"email": email})
     if not user:
+        print(f"USER NOT FOUND: {email}")
         return {"message": "Si cet email existe, un code a été envoyé"}
+    
+    print(f"USER FOUND: {user['_id']}")
     
     # Generate 6-digit code
     reset_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
@@ -313,12 +318,17 @@ async def forgot_password(data: dict):
         {"_id": user["_id"]},
         {"$set": {"reset_token": reset_code, "reset_token_expires": expires}}
     )
+    print(f"CODE GENERATED: {reset_code}")
     
     # Send email via Resend
     resend_api_key = os.getenv("RESEND_API_KEY")
+    print(f"API KEY EXISTS: {bool(resend_api_key)}")
+    print(f"API KEY VALUE: {resend_api_key[:10] if resend_api_key else 'NONE'}...")
+    
     if resend_api_key:
         try:
             async with httpx.AsyncClient() as client:
+                print("SENDING EMAIL...")
                 response = await client.post(
                     "https://api.resend.com/emails",
                     headers={
@@ -328,21 +338,16 @@ async def forgot_password(data: dict):
                     json={
                         "from": "New School <noreply@ab-digital1.com>",
                         "to": [email],
-                        "subject": "🔐 Code de réinitialisation New School",
+                        "subject": "Code de reinitialisation New School",
                         "html": f"""
-                        <html>
-                        <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
-                            <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
-                                <h1 style="color: #D946EF;">🔐 Réinitialisation de mot de passe</h1>
-                                <p style="color: #CCCCCC;">Voici ton code de vérification :</p>
-                                <div style="background-color: #2A2A2A; border-radius: 12px; padding: 20px; text-align: center; margin: 20px 0;">
-                                    <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #D946EF;">{reset_code}</span>
-                                </div>
-                                <p style="color: #888;">Ce code expire dans 15 minutes.</p>
-                                <p style="color: #666; font-size: 12px;">Si tu n'as pas demandé cette réinitialisation, ignore cet email.</p>
+                        <div style="font-family: Arial; max-width: 500px; margin: 0 auto; background: #1A1A1A; padding: 40px; border-radius: 16px;">
+                            <h2 style="color: #D946EF;">Reinitialisation de mot de passe</h2>
+                            <p style="color: #CCC;">Ton code :</p>
+                            <div style="background: #2A2A2A; padding: 20px; border-radius: 10px; text-align: center;">
+                                <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #D946EF;">{reset_code}</span>
                             </div>
-                        </body>
-                        </html>
+                            <p style="color: #888;">Ce code expire dans 15 minutes.</p>
+                        </div>
                         """
                     }
                 )
@@ -350,8 +355,12 @@ async def forgot_password(data: dict):
                 print(f"RESEND RESPONSE: {response.text}")
         except Exception as e:
             print(f"RESEND ERROR: {e}")
+    else:
+        print("NO API KEY - EMAIL NOT SENT")
     
     return {"message": "Si cet email existe, un code a été envoyé"}
+
+
 @app.post("/api/auth/reset-password")
 async def reset_password(data: dict):
     """Reset password with 6-digit code"""
