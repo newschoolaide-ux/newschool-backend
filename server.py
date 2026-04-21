@@ -346,12 +346,10 @@ async def forgot_password(data: dict):
                         """
                     }
                 )
-                if response.status_code == 200:
-                    logger.info(f"Reset email sent to {email}")
-                else:
-                    logger.error(f"Resend error: {response.text}")
+                print(f"RESEND STATUS: {response.status_code}")
+                print(f"RESEND RESPONSE: {response.text}")
         except Exception as e:
-            logger.error(f"Reset email error: {e}")
+            print(f"RESEND ERROR: {e}")
     
     return {"message": "Si cet email existe, un code a été envoyé"}
 @app.post("/api/auth/reset-password")
