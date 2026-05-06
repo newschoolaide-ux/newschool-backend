@@ -594,7 +594,7 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
         )
     
     return {"message": "Profile updated successfully"}
-En attendant, voici le code à ajouter. Remplacez tout le bloc create_event par :
+
 @app.post("/api/events")
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
     if current_user.get("create_credit", 0) <= 0:
