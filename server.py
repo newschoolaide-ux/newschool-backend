@@ -528,7 +528,7 @@ class PushTokenRequest(BaseModel):
 async def save_push_token(data: PushTokenRequest, current_user: dict = Depends(get_current_user)):
     """Save user's push notification token"""
     await db.users.update_one(
-        {"user_id": current_user["user_id"]},
+        {"_id": current_user["_id"]},
         {"$set": {"push_token": data.push_token}}
     )
     return {"message": "Push token saved"}
@@ -537,7 +537,7 @@ async def save_push_token(data: PushTokenRequest, current_user: dict = Depends(g
 async def delete_push_token(current_user: dict = Depends(get_current_user)):
     """Remove user's push notification token"""
     await db.users.update_one(
-        {"user_id": current_user["user_id"]},
+        {"_id": current_user["_id"]},
         {"$unset": {"push_token": ""}}
     )
     return {"message": "Push token removed"}
