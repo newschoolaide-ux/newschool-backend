@@ -1088,3 +1088,21 @@ async def get_admin_reports(current_user: dict = Depends(get_current_user)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
+@app.delete("/api/admin/events/{event_id}")
+async def admin_delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    """Admin delete any event"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    result = await db.events.delete_one({"event_id": event_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"message": "Event deleted"}
+
+@app.post("/api/admin/users/{user_id}/ban")
+async def admin_ban_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Ban a user"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    await db.users.update_one({"_id": user_id}, {"$set": {"is_banned": True}})
+    return {"message": "User banned"}
