@@ -1065,20 +1065,18 @@ async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = D
             entitlements = subscriber_data.get("subscriber", {}).get("entitlements", {})
             
             new_tier = "free"
-for ent_name, ent_data in entitlements.items():
-    expires = ent_data.get("expires_date")
-    if expires:
-        exp_date = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-        if exp_date > datetime.now(timezone.utc):
-            # Check for Prenium entitlement
-            if ent_name == "Prenium" or ent_name == "NEW SCHOOL Pro":
-                # Check active subscriptions to determine tier
-                product_id = ent_data.get("product_identifier", "")
-                if "ambassador" in product_id.lower():
-                    new_tier = "ambassador"
-                    break
-                else:
-                    new_tier = "standard"
+            for ent_name, ent_data in entitlements.items():
+                expires = ent_data.get("expires_date")
+                if expires:
+                    exp_date = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                    if exp_date > datetime.now(timezone.utc):
+                        if ent_name == "Prenium" or ent_name == "NEW SCHOOL Pro":
+                            product_id = ent_data.get("product_identifier", "")
+                            if "ambassador" in product_id.lower():
+                                new_tier = "ambassador"
+                                break
+                            else:
+                                new_tier = "standard"
             
             credits = {"free": (1, 3), "standard": (5, 15), "ambassador": (999, 999)}
             create_credit, join_credit = credits.get(new_tier, (1, 3))
@@ -1100,6 +1098,8 @@ for ent_name, ent_data in entitlements.items():
 async def sync_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
     """Sync subscription status with RevenueCat"""
     return await upgrade_subscription(data, current_user)
+
+
 
 @app.get("/api/users/history")
 async def get_user_history(current_user: dict = Depends(get_current_user)):
