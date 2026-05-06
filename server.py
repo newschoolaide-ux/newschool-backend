@@ -810,6 +810,18 @@ async def leave_event(event_id: str, current_user: dict = Depends(get_current_us
     if event["creator_id"] == current_user["_id"]:
         raise HTTPException(status_code=400, detail="Creator cannot leave")
     await db.events.update_one({"_id": event_id}, {"$pull": {"participants": current_user["_id"]}})
+    
+    # 🔔 Notifier le créateur
+    creator = await db.users.find_one({"_id": event["creator_id"]})
+    if creator and creator.get("push_token"):
+        leaver_name = current_user.get("first_name", "Quelqu'un")
+        await send_push_notification(
+            creator["push_token"],
+            "Départ d'un participant 👋",
+            f"{leaver_name} a quitté votre New School \"{event['name']}\"",
+            {"type": "leave", "event_id": event_id}
+        )
+    
     return {"message": "Left successfully"}
 @app.put("/api/events/{event_id}")
 async def update_event(event_id: str, event: EventCreate, current_user: dict = Depends(get_current_user)):
@@ -842,44 +854,21 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
     
     await db.events.update_one({"_id": event_id}, {"$set": update_data})
     
+    # 🔔 Notifier tous les participants
+    for participant_id in existing_event.get("participants", []):
+        if participant_id != current_user["_id"]:
+            participant = await db.users.find_one({"_id": participant_id})
+            if participant and participant.get("push_token"):
+                await send_push_notification(
+                    participant["push_token"],
+                    "Événement modifié 📝",
+                    f"La New School \"{event.name}\" a été mise à jour",
+                    {"type": "updated", "event_id": event_id}
+                )
+    
     return {"message": "Event updated successfully"}
 
-@app.put("/api/events/{event_id}")
-async def update_event(event_id: str, event_data: dict, current_user: dict = Depends(get_current_user)):
-    """Update an event (creator only)"""
-    event = await db.events.find_one({"_id": event_id})
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
-    
-    if event["creator_id"] != current_user["_id"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
-    allowed_fields = [
-        "name", "description", "location_name", "latitude", "longitude",
-        "max_participants", "duration_hours", "desired_nationalities",
-        "theme", "photo", "gender_filter", "age_ranges"
-    ]
-    
-    update_data = {k: v for k, v in event_data.items() if k in allowed_fields and v is not None}
-    
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No valid fields to update")
-    
-    if "max_participants" in update_data:
-        current_participants = len(event.get("participants", []))
-        if update_data["max_participants"] < current_participants:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Cannot set max_participants below current participant count ({current_participants})"
-            )
-    
-    await db.events.update_one(
-        {"_id": event_id},
-        {"$set": update_data}
-    )
-    
-    updated_event = await db.events.find_one({"_id": event_id})
-    return updated_event
+
 @app.delete("/api/events/{event_id}")
 async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
     event = await db.events.find_one({"_id": event_id})
@@ -887,6 +876,19 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Event not found")
     if event["creator_id"] != current_user["_id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
+    
+    # 🔔 Notifier tous les participants AVANT de supprimer
+    for participant_id in event.get("participants", []):
+        if participant_id != current_user["_id"]:
+            participant = await db.users.find_one({"_id": participant_id})
+            if participant and participant.get("push_token"):
+                await send_push_notification(
+                    participant["push_token"],
+                    "Événement annulé 😔",
+                    f"La New School \"{event['name']}\" a été annulée par le créateur",
+                    {"type": "cancelled", "event_id": event_id}
+                )
+    
     await db.events.delete_one({"_id": event_id})
     return {"message": "Event deleted"}
 
