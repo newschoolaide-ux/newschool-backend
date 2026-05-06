@@ -1038,19 +1038,9 @@ async def get_tiers(current_user: dict = Depends(get_current_user)):
     ]
 
 
-@app.post("/api/subscriptions/upgrade")
-async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
-    credits = {"free": (1, 3), "standard": (5, 15), "ambassador": (999, 999)}
-    create_credit, join_credit = credits.get(data.tier, (1, 3))
-    await db.users.update_one({"_id": current_user["_id"]}, {"$set": {"subscription_tier": data.tier, "create_credit": create_credit, "join_credit": join_credit}})
-    return {"message": "Subscription updated"}
 
-@app.post("/api/subscriptions/sync")
-async def sync_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
-    credits = {"free": (1, 3), "standard": (5, 15), "ambassador": (999, 999)}
-    create_credit, join_credit = credits.get(data.tier, (1, 3))
-    await db.users.update_one({"_id": current_user["_id"]}, {"$set": {"subscription_tier": data.tier, "create_credit": create_credit, "join_credit": join_credit}})
-    return {"message": "Subscription synced"}
+
+
 
 @app.post("/api/subscriptions/upgrade")
 async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
