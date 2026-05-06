@@ -547,6 +547,26 @@ async def delete_push_token(current_user: dict = Depends(get_current_user)):
         {"$unset": {"push_token": ""}}
     )
     return {"message": "Push token removed"}
+@app.post("/api/users/location")
+async def update_user_location(location: dict, current_user: dict = Depends(get_current_user)):
+    """Update user's last known location"""
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+    
+    if latitude is None or longitude is None:
+        raise HTTPException(status_code=400, detail="latitude and longitude required")
+    
+    await db.users.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {
+            "last_location": {
+                "type": "Point",
+                "coordinates": [longitude, latitude]
+            },
+            "location_updated_at": datetime.utcnow()
+        }}
+    )
+    return {"message": "Location updated"}
 
 @app.put("/api/users/profile")
 async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_current_user)):
@@ -574,6 +594,7 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
         )
     
     return {"message": "Profile updated successfully"}
+En attendant, voici le code à ajouter. Remplacez tout le bloc create_event par :
 @app.post("/api/events")
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
     if current_user.get("create_credit", 0) <= 0:
@@ -607,6 +628,30 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
     }
     await db.events.insert_one(event_doc)
     await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"create_credit": -1}})
+    
+    # 🔔 Notifier les utilisateurs proches (dans un rayon de 20km)
+    try:
+        nearby_users = await db.users.find({
+            "last_location": {
+                "$near": {
+                    "$geometry": {"type": "Point", "coordinates": [event.longitude, event.latitude]},
+                    "$maxDistance": 20000  # 20km en mètres
+                }
+            },
+            "push_token": {"$exists": True, "$ne": None},
+            "_id": {"$ne": current_user["_id"]}  # Pas le créateur
+        }).to_list(100)
+        
+        for user in nearby_users:
+            await send_push_notification(
+                user["push_token"],
+                "Nouvelle New School près de vous ! 📍",
+                f"\"{event.name}\" vient d'être créée",
+                {"type": "nearby", "event_id": event_id}
+            )
+    except Exception as e:
+        logger.error(f"Error notifying nearby users: {e}")
+    
     return {
         "event_id": event_id,
         "id": event_id,
@@ -632,7 +677,6 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "status": "active",
         "created_at": datetime.utcnow().isoformat()
     }
-
 @app.get("/api/events")
 async def get_events(current_user: dict = Depends(get_current_user)):
     events = await db.events.find().sort("start_time", 1).to_list(100)
@@ -680,6 +724,7 @@ async def get_events(current_user: dict = Depends(get_current_user)):
 @app.get("/api/events/nearby")
 async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
     await db.events.create_index([("location", "2dsphere")])
+    await db.users.create_index([("last_location", "2dsphere")])
     events = await db.events.find({"location": {"$nearSphere": {"$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, "$maxDistance": radius_km * 1000}}, "end_time": {"$gte": datetime.utcnow()}}).to_list(100)
     result = []
     for e in events:
