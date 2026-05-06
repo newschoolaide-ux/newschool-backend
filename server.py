@@ -1094,7 +1094,7 @@ async def admin_delete_event(event_id: str, current_user: dict = Depends(get_cur
     """Admin delete any event"""
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
-    result = await db.events.delete_one({"event_id": event_id})
+    result = await db.events.delete_one({"_id": event_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"message": "Event deleted"}
