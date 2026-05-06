@@ -527,10 +527,16 @@ class PushTokenRequest(BaseModel):
 @app.post("/api/users/push-token")
 async def save_push_token(data: PushTokenRequest, current_user: dict = Depends(get_current_user)):
     """Save user's push notification token"""
-    await db.users.update_one(
+    print(f"DEBUG: current_user keys = {current_user.keys()}")
+    print(f"DEBUG: current_user _id = {current_user.get('_id')}")
+    print(f"DEBUG: push_token = {data.push_token}")
+    
+    result = await db.users.update_one(
         {"_id": current_user["_id"]},
         {"$set": {"push_token": data.push_token}}
     )
+    print(f"DEBUG: matched_count = {result.matched_count}, modified_count = {result.modified_count}")
+    
     return {"message": "Push token saved"}
 
 @app.delete("/api/users/push-token")
