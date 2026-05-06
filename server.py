@@ -1037,7 +1037,7 @@ async def get_tiers(current_user: dict = Depends(get_current_user)):
         {"tier": "ambassador", "price": 6.99, "monthly_limit": 999, "tagline": "Accès illimité", "features": ["Participations illimitées", "Créations illimitées"]}
     ]
 
-🔍 Cherchez ces lignes (vers ligne ~1040) :
+
 @app.post("/api/subscriptions/upgrade")
 async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
     credits = {"free": (1, 3), "standard": (5, 15), "ambassador": (999, 999)}
