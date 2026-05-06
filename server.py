@@ -1037,6 +1037,7 @@ async def get_tiers(current_user: dict = Depends(get_current_user)):
         {"tier": "ambassador", "price": 6.99, "monthly_limit": 999, "tagline": "Accès illimité", "features": ["Participations illimitées", "Créations illimitées"]}
     ]
 
+🔍 Cherchez ces lignes (vers ligne ~1040) :
 @app.post("/api/subscriptions/upgrade")
 async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
     credits = {"free": (1, 3), "standard": (5, 15), "ambassador": (999, 999)}
@@ -1050,6 +1051,61 @@ async def sync_subscription(data: SubscriptionUpgrade, current_user: dict = Depe
     create_credit, join_credit = credits.get(data.tier, (1, 3))
     await db.users.update_one({"_id": current_user["_id"]}, {"$set": {"subscription_tier": data.tier, "create_credit": create_credit, "join_credit": join_credit}})
     return {"message": "Subscription synced"}
+
+@app.post("/api/subscriptions/upgrade")
+async def upgrade_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
+    """Verify subscription with RevenueCat and upgrade"""
+    revenuecat_key = os.getenv("REVENUECAT_SECRET_KEY")
+    if not revenuecat_key:
+        raise HTTPException(status_code=500, detail="RevenueCat not configured")
+    
+    app_user_id = current_user["_id"]
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"https://api.revenuecat.com/v1/subscribers/{app_user_id}",
+                headers={"Authorization": f"Bearer {revenuecat_key}"}
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(status_code=400, detail="Could not verify subscription")
+            
+            subscriber_data = response.json()
+            entitlements = subscriber_data.get("subscriber", {}).get("entitlements", {})
+            
+            new_tier = "free"
+            for ent_name, ent_data in entitlements.items():
+                expires = ent_data.get("expires_date")
+                if expires:
+                    exp_date = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                    if exp_date > datetime.now(timezone.utc):
+                        if "ambassador" in ent_name.lower():
+                            new_tier = "ambassador"
+                            break
+                        elif "standard" in ent_name.lower():
+                            new_tier = "standard"
+            
+            credits = {"free": (1, 3), "standard": (5, 15), "ambassador": (999, 999)}
+            create_credit, join_credit = credits.get(new_tier, (1, 3))
+            
+            await db.users.update_one(
+                {"_id": current_user["_id"]},
+                {"$set": {"subscription_tier": new_tier, "create_credit": create_credit, "join_credit": join_credit}}
+            )
+            
+            return {"message": "Subscription verified", "tier": new_tier}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"RevenueCat error: {e}")
+        raise HTTPException(status_code=500, detail="Subscription verification failed")
+
+@app.post("/api/subscriptions/sync")
+async def sync_subscription(data: SubscriptionUpgrade, current_user: dict = Depends(get_current_user)):
+    """Sync subscription status with RevenueCat"""
+    return await upgrade_subscription(data, current_user)
 
 @app.get("/api/users/history")
 async def get_user_history(current_user: dict = Depends(get_current_user)):
