@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from bson import ObjectId
 import os
@@ -725,9 +725,37 @@ async def get_events(current_user: dict = Depends(get_current_user)):
 async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
     await db.events.create_index([("location", "2dsphere")])
     await db.users.create_index([("last_location", "2dsphere")])
-    events = await db.events.find({"location": {"$nearSphere": {"$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, "$maxDistance": radius_km * 1000}}, "end_time": {"$gte": datetime.utcnow()}}).to_list(100)
+    
+    # Get current time with timezone awareness
+    now = datetime.now(timezone.utc)
+    
+    # Query with proper date filtering
+    events = await db.events.find({
+        "location": {
+            "$nearSphere": {
+                "$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, 
+                "$maxDistance": radius_km * 1000
+            }
+        }
+    }).to_list(100)
+    
     result = []
     for e in events:
+        # Skip events without end_time
+        if not e.get("end_time"):
+            continue
+            
+        # Handle end_time - convert to timezone aware if needed
+        end_time = e.get("end_time")
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        # Skip expired events
+        if end_time < now:
+            continue
+        
         participant_ids = e.get("participants", [])
         participants_data = []
         for pid in participant_ids:
@@ -766,6 +794,8 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "created_at": e.get("created_at", datetime.utcnow()).isoformat()
         })
     return result
+
+
 
 @app.get("/api/events/{event_id}")
 async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
