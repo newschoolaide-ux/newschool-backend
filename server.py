@@ -1335,7 +1335,7 @@ async def send_referral_campaign(apple_only: bool = False):
         first_name = user.get("first_name", "")
         
         try:
-            resend.emails.send({
+            resend.Emails.send({
                 "from": "New School <newschoolaide@gmail.com>",
                 "to": user["email"],
                 "subject": "🎁 Invitez 5 amis = 6 mois d'abonnement GRATUIT !",
