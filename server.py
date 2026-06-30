@@ -234,6 +234,93 @@ async def send_admin_notification(user_email: str, first_name: str):
     except Exception as e:
         logger.error(f"Admin notification error: {e}")
  
+# ============ REFERRAL LANDING PAGE ============
+
+from fastapi.responses import HTMLResponse
+
+@app.get("/invite/{referral_code}", response_class=HTMLResponse)
+async def referral_landing_page(referral_code: str):
+    """Serve the referral landing page"""
+    referrer = await db.users.find_one({"referral_code": referral_code})
+    referrer_name = referrer.get("first_name", "Un ami") if referrer else "Un ami"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Rejoins New School !</title>
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }}
+            .container {{ background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border-radius: 24px; padding: 40px; max-width: 400px; width: 100%; text-align: center; border: 1px solid rgba(255,255,255,0.1); }}
+            h1 {{ color: #D946EF; font-size: 28px; margin-bottom: 10px; }}
+            .subtitle {{ color: #fff; font-size: 18px; margin-bottom: 30px; opacity: 0.9; }}
+            .gift {{ font-size: 60px; margin-bottom: 20px; }}
+            input {{ width: 100%; padding: 16px; border-radius: 12px; border: 2px solid rgba(217, 70, 239, 0.3); background: rgba(255,255,255,0.1); color: #fff; font-size: 16px; outline: none; margin-bottom: 20px; }}
+            input:focus {{ border-color: #D946EF; }}
+            input::placeholder {{ color: rgba(255,255,255,0.5); }}
+            button {{ width: 100%; padding: 16px; border-radius: 12px; border: none; background: linear-gradient(135deg, #D946EF, #8B5CF6); color: #fff; font-size: 18px; font-weight: bold; cursor: pointer; }}
+            button:disabled {{ opacity: 0.5; }}
+            .success {{ color: #4ade80; margin-top: 20px; display: none; }}
+            .error {{ color: #f87171; margin-top: 10px; font-size: 14px; display: none; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="gift">🎁</div>
+            <h1>{referrer_name} t'invite !</h1>
+            <p class="subtitle">Rejoins New School et decouvre des evenements pres de chez toi</p>
+            <input type="email" id="email" placeholder="Ton adresse email" required>
+            <p class="error" id="error"></p>
+            <button onclick="submitEmail()" id="submitBtn">Telecharger l'app</button>
+            <p class="success" id="success">Parrainage active ! Redirection...</p>
+        </div>
+        <script>
+            async function submitEmail() {{
+                const email = document.getElementById('email').value.trim().toLowerCase();
+                const btn = document.getElementById('submitBtn');
+                const error = document.getElementById('error');
+                const success = document.getElementById('success');
+                error.style.display = 'none';
+                if (!email || !email.includes('@')) {{ error.textContent = 'Entre une adresse email valide'; error.style.display = 'block'; return; }}
+                btn.disabled = true; btn.textContent = 'Chargement...';
+                try {{
+                    const response = await fetch('/api/referral/register-pending', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }}, body: JSON.stringify({{ email: email, referral_code: '{referral_code}' }}) }});
+                    if (response.ok) {{ success.style.display = 'block'; setTimeout(() => {{ window.location.href = 'https://apps.apple.com/us/app/new-school-app/id6760179312'; }}, 1500); }}
+                    else {{ const data = await response.json(); error.textContent = data.detail || 'Erreur'; error.style.display = 'block'; btn.disabled = false; btn.textContent = 'Telecharger l\\'app'; }}
+                }} catch (e) {{ error.textContent = 'Erreur de connexion'; error.style.display = 'block'; btn.disabled = false; btn.textContent = 'Telecharger l\\'app'; }}
+            }}
+            document.getElementById('email').addEventListener('keypress', (e) => {{ if (e.key === 'Enter') submitEmail(); }});
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+@app.post("/api/referral/register-pending")
+async def register_pending_referral(data: dict):
+    email = data.get("email", "").lower().strip()
+    referral_code = data.get("referral_code", "")
+    if not email or not referral_code:
+        raise HTTPException(status_code=400, detail="Email et code requis")
+    referrer = await db.users.find_one({"referral_code": referral_code})
+    if not referrer:
+        raise HTTPException(status_code=400, detail="Code de parrainage invalide")
+    existing_user = await db.users.find_one({"email": email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email deja inscrit")
+    await db.pending_referrals.update_one(
+        {"email": email},
+        {"$set": {"email": email, "referral_code": referral_code, "referrer_id": referrer["_id"], "created_at": datetime.utcnow()}},
+        upsert=True
+    )
+    return {"message": "Parrainage enregistre", "success": True}
+
+# ============ END REFERRAL LANDING PAGE ============
+
+
 
 @app.post("/api/auth/register")
 async def register(user: UserCreate):
@@ -258,6 +345,17 @@ async def register(user: UserCreate):
         "created_at": datetime.utcnow()
     }
     await db.users.insert_one(user_doc)
+    # Check for pending referral
+    pending = await db.pending_referrals.find_one({"email": user.email.lower()})
+    if pending:
+        referrer_id = pending.get("referrer_id")
+        if referrer_id:
+            await db.users.update_one({"_id": user_id}, {"$set": {"referred_by": referrer_id}})
+            await db.users.update_one({"_id": referrer_id}, {"$inc": {"referral_count": 1}})
+            referrer = await db.users.find_one({"_id": referrer_id})
+            if referrer and referrer.get("referral_count", 0) >= 5:
+                await db.users.update_one({"_id": referrer_id}, {"$set": {"subscription_tier": "standard", "subscription_expires": datetime.utcnow() + timedelta(days=180)}})
+            await db.pending_referrals.delete_one({"email": user.email.lower()})
     await send_welcome_email(user.email, user.first_name)
     await send_admin_notification(user.email, user.first_name)
     token = create_access_token({"sub": user_id})
@@ -1331,7 +1429,7 @@ async def send_referral_campaign(apple_only: bool = False):
             continue
             
         referral_code = user.get("referral_code")
-        referral_link = f"https://newschool-app.com/invite/{referral_code}"
+        referral_link = f"https://newschool-backend-production.up.railway.app/invite/{referral_code}"
         first_name = user.get("first_name", "")
         
         try:
