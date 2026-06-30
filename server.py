@@ -42,7 +42,7 @@ MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 client = AsyncIOMotorClient(MONGO_URL)
 db = client.newschool
 
-ADMIN_EMAIL = "newschoolaide@gmail.com"
+ADMIN_EMAIL = "newschool@ab-digital1.com"
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -179,7 +179,7 @@ async def send_welcome_email(to_email: str, first_name: str):
                             
                             <p style="color: #888888; font-size: 14px; margin-top: 40px; border-top: 1px solid #333; padding-top: 20px;">
                                 💜 L'équipe New School<br>
-                                📧 newschoolaide@gmail.com
+                                📧 newschool@ab-digital1.com
                             </p>
                         </div>
                     </body>
@@ -214,7 +214,7 @@ async def send_admin_notification(user_email: str, first_name: str):
                 },
                 json={
                     "from": "New School <noreply@ab-digital1.com>",
-                    "to": ["newschoolaide@gmail.com"],
+                    "to": ["newschool@ab-digital1.com"],
                     "subject": f"🆕 Nouvelle inscription : {first_name}",
                     "html": f"""
                     <html>
@@ -1333,7 +1333,7 @@ async def send_referral_campaign():
         
         try:
             resend.Emails.send({
-                "from": "New School <newschoolaide@gmail.com>",
+                "from": "New School <newschool@ab-digital1.com>",
                 "to": user["email"],
                 "subject": "🎁 Invitez 5 amis = 6 mois d'abonnement GRATUIT !",
                 "html": f"""
