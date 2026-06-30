@@ -56,6 +56,47 @@ async def debug_all_events():
         })
     return {"server_time_utc": str(now), "total_events": len(result), "events": result}
 
+@app.get("/api/debug/nearby-test")
+async def debug_nearby_test():
+    """Test nearby query with Paris coordinates"""
+    # Paris coordinates (where the Google event is)
+    latitude = 48.858247
+    longitude = 2.346296
+    radius_km = 50
+    
+    now = datetime.now(timezone.utc)
+    
+    # Same query as the real endpoint
+    events = await db.events.find({
+        "location": {
+            "$nearSphere": {
+                "$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, 
+                "$maxDistance": radius_km * 1000
+            }
+        }
+    }).to_list(100)
+    
+    result = []
+    for e in events:
+        end_time = e.get("end_time")
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        elif end_time and end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        is_expired = end_time < now if end_time else True
+        
+        result.append({
+            "id": e.get("_id"),
+            "name": e.get("name"),
+            "end_time": str(e.get("end_time")),
+            "is_expired": is_expired,
+            "would_be_filtered": is_expired or not e.get("end_time")
+        })
+    
+    return {"total_from_geo_query": len(events), "events": result}
+
+
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
