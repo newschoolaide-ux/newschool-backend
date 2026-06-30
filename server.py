@@ -13,7 +13,11 @@ import secrets
 import logging
 import httpx
 import random
+import resend
+import string
 
+# Resend configuration
+resend.api_key = "re_AHvA6Tj3_2o4KjKhBp31tsYHVH5ueqwxe"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1209,6 +1213,180 @@ async def get_admin_reports(current_user: dict = Depends(get_current_user)):
         "status": r.get("status", "pending"),
         "created_at": r.get("created_at").isoformat() if r.get("created_at") else None
     } for r in reports]
+
+# ======================= REFERRAL SYSTEM =======================
+
+def generate_referral_code():
+    """Generate a unique 8-character referral code"""
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(8))
+
+@app.post("/api/referral/generate-codes")
+async def generate_referral_codes_for_all_users():
+    """Generate referral codes for all users who don't have one"""
+    users_without_code = await db.users.find({"referral_code": {"$exists": False}}).to_list(1000)
+    
+    for user in users_without_code:
+        code = generate_referral_code()
+        # Ensure unique code
+        while await db.users.find_one({"referral_code": code}):
+            code = generate_referral_code()
+        
+        await db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"referral_code": code, "referral_count": 0}}
+        )
+    
+    return {"message": f"Generated codes for {len(users_without_code)} users"}
+
+@app.get("/api/referral/my-link")
+async def get_my_referral_link(current_user: dict = Depends(get_current_user)):
+    """Get current user's referral link"""
+    user = await db.users.find_one({"_id": current_user["_id"]})
+    
+    if not user.get("referral_code"):
+        code = generate_referral_code()
+        while await db.users.find_one({"referral_code": code}):
+            code = generate_referral_code()
+        await db.users.update_one(
+            {"_id": current_user["_id"]},
+            {"$set": {"referral_code": code, "referral_count": 0}}
+        )
+    else:
+        code = user["referral_code"]
+    
+    return {
+        "referral_code": code,
+        "referral_link": f"https://newschool-app.com/invite/{code}",
+        "referral_count": user.get("referral_count", 0)
+    }
+
+@app.post("/api/auth/register-with-referral")
+async def register_with_referral(email: str, password: str, first_name: str, referral_code: str = None):
+    """Register a new user with optional referral code"""
+    # Check if user exists
+    existing = await db.users.find_one({"email": email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Hash password
+    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    
+    # Create user
+    user_id = f"user_{secrets.token_hex(12)}"
+    new_user = {
+        "_id": user_id,
+        "email": email.lower(),
+        "password_hash": password_hash,
+        "first_name": first_name,
+        "referral_code": generate_referral_code(),
+        "referral_count": 0,
+        "referred_by": referral_code,
+        "subscription_tier": "free",
+        "create_credit": 1,
+        "join_credit": 3,
+        "created_at": datetime.utcnow()
+    }
+    
+    await db.users.insert_one(new_user)
+    
+    # If referral code provided, increment referrer's count
+    if referral_code:
+        referrer = await db.users.find_one({"referral_code": referral_code})
+        if referrer:
+            new_count = referrer.get("referral_count", 0) + 1
+            update_data = {"referral_count": new_count}
+            
+            # If referrer reaches 5 referrals, give them 6 months free standard
+            if new_count >= 5 and referrer.get("subscription_tier") == "free":
+                update_data["subscription_tier"] = "standard"
+                update_data["subscription_reward_until"] = datetime.utcnow() + timedelta(days=180)
+                update_data["create_credit"] = 999
+                update_data["join_credit"] = 999
+            
+            await db.users.update_one(
+                {"_id": referrer["_id"]},
+                {"$set": update_data}
+            )
+    
+    return {"message": "User registered successfully", "user_id": user_id}
+
+@app.post("/api/admin/send-referral-campaign")
+async def send_referral_campaign():
+    """Send referral campaign email to all users"""
+    # First, generate codes for all users
+    await generate_referral_codes_for_all_users()
+    
+    # Get all users with email
+    users = await db.users.find({"email": {"$exists": True}}).to_list(1000)
+    
+    sent_count = 0
+    errors = []
+    
+    for user in users:
+        if not user.get("email"):
+            continue
+            
+        referral_code = user.get("referral_code")
+        referral_link = f"https://newschool-app.com/invite/{referral_code}"
+        first_name = user.get("first_name", "")
+        
+        try:
+            resend.emails.send({
+                "from": "New School <newschoolaide@gmail.com>",
+                "to": user["email"],
+                "subject": "🎁 Invitez 5 amis = 6 mois d'abonnement GRATUIT !",
+                "html": f"""
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h1 style="color: #D946EF;">Bonjour {first_name} ! 👋</h1>
+                    
+                    <p>Vous faites partie des premiers membres de <strong>New School</strong>, et on voulait vous remercier ! 🎉</p>
+                    
+                    <p>Pour célébrer notre communauté grandissante, on lance une offre exclusive :</p>
+                    
+                    <div style="background: linear-gradient(135deg, #D946EF, #8B5CF6); padding: 20px; border-radius: 12px; text-align: center; margin: 20px 0;">
+                        <h2 style="color: white; margin: 0;">🎁 INVITEZ 5 AMIS</h2>
+                        <h3 style="color: white; margin: 10px 0;">= 6 MOIS D'ABONNEMENT STANDARD GRATUIT</h3>
+                    </div>
+                    
+                    <p><strong>C'est simple :</strong></p>
+                    <ol>
+                        <li>Partagez votre lien unique ci-dessous</li>
+                        <li>Vos amis s'inscrivent via ce lien</li>
+                        <li>Dès 5 inscriptions, vous recevez automatiquement 6 mois gratuits !</li>
+                    </ol>
+                    
+                    <div style="background: #1a1a1a; padding: 20px; border-radius: 12px; text-align: center; margin: 20px 0;">
+                        <p style="color: #888; margin: 0 0 10px 0;">Votre lien de parrainage :</p>
+                        <a href="{referral_link}" style="color: #D946EF; font-size: 18px; font-weight: bold; word-break: break-all;">{referral_link}</a>
+                    </div>
+                    
+                    <p>À très vite sur New School ! 🚀</p>
+                    
+                    <p style="color: #888;">L'équipe New School</p>
+                </div>
+                """
+            })
+            sent_count += 1
+        except Exception as e:
+            errors.append({"email": user["email"], "error": str(e)})
+    
+    return {
+        "message": f"Campaign sent to {sent_count} users",
+        "errors": errors
+    }
+
+@app.get("/api/invite/{referral_code}")
+async def get_referral_info(referral_code: str):
+    """Get info about a referral code (for the invite page)"""
+    referrer = await db.users.find_one({"referral_code": referral_code})
+    if not referrer:
+        raise HTTPException(status_code=404, detail="Invalid referral code")
+    
+    return {
+        "referrer_name": referrer.get("first_name", "Un ami"),
+        "referral_code": referral_code
+    }
 
 
 
