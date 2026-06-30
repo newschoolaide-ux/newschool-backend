@@ -32,6 +32,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/api/debug/all-events")
+async def debug_all_events():
+    """List all events for debugging"""
+    now = datetime.now(timezone.utc)
+    events = await db.events.find({}).to_list(100)
+    result = []
+    for e in events:
+        end_time = e.get("end_time")
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        elif end_time and end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        is_expired = end_time < now if end_time else True
+        
+        result.append({
+            "id": e.get("_id"),
+            "name": e.get("name"),
+            "end_time": str(e.get("end_time")),
+            "is_expired": is_expired,
+            "has_location": e.get("location") is not None
+        })
+    return {"server_time_utc": str(now), "total_events": len(result), "events": result}
+
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
