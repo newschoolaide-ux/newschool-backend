@@ -42,7 +42,7 @@ MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 client = AsyncIOMotorClient(MONGO_URL)
 db = client.newschool
 
-ADMIN_EMAIL = "newschool@ab-digital1.com"
+ADMIN_EMAIL = "newschoolaide@gmail.com"
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -179,7 +179,7 @@ async def send_welcome_email(to_email: str, first_name: str):
                             
                             <p style="color: #888888; font-size: 14px; margin-top: 40px; border-top: 1px solid #333; padding-top: 20px;">
                                 💜 L'équipe New School<br>
-                                📧 newschool@ab-digital1.com
+                                📧 newschoolaide@gmail.com
                             </p>
                         </div>
                     </body>
@@ -214,7 +214,7 @@ async def send_admin_notification(user_email: str, first_name: str):
                 },
                 json={
                     "from": "New School <noreply@ab-digital1.com>",
-                    "to": ["newschool@ab-digital1.com"],
+                    "to": ["newschoolaide@gmail.com"],
                     "subject": f"🆕 Nouvelle inscription : {first_name}",
                     "html": f"""
                     <html>
@@ -1312,13 +1312,16 @@ async def register_with_referral(email: str, password: str, first_name: str, ref
     return {"message": "User registered successfully", "user_id": user_id}
 
 @app.post("/api/admin/send-referral-campaign")
-async def send_referral_campaign():
+async def send_referral_campaign(apple_only: bool = False):
     """Send referral campaign email to all users"""
     # First, generate codes for all users
     await generate_referral_codes_for_all_users()
     
     # Get all users with email
-    users = await db.users.find({"email": {"$exists": True}}).to_list(1000)
+    if apple_only:
+        users = await db.users.find({"email": {"$regex": "@private.appleid.com$"}}).to_list(1000)
+    else:
+        users = await db.users.find({"email": {"$exists": True}}).to_list(1000)
     
     sent_count = 0
     errors = []
@@ -1332,8 +1335,8 @@ async def send_referral_campaign():
         first_name = user.get("first_name", "")
         
         try:
-            resend.Emails.send({
-                "from": "New School <newschool@ab-digital1.com>",
+            resend.emails.send({
+                "from": "New School <newschoolaide@gmail.com>",
                 "to": user["email"],
                 "subject": "🎁 Invitez 5 amis = 6 mois d'abonnement GRATUIT !",
                 "html": f"""
