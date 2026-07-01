@@ -960,7 +960,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "status": "active",
             "created_at": e.get("created_at", datetime.utcnow()).isoformat()
         })
- logger.info(f"🗺️ Returning {len(result)} events")
+    logger.info(f"🗺️ Returning {len(result)} events")
      
     return result
 
