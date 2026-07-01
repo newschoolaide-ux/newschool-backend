@@ -32,6 +32,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.delete("/api/admin/cleanup-expired-events")
+async def cleanup_expired_events():
+    """Delete all expired events to free up disk space"""
+    now = datetime.now(timezone.utc)
+    
+    # Find expired events
+    expired_events = await db.events.find({}).to_list(1000)
+    
+    deleted_count = 0
+    for event in expired_events:
+        end_time = event.get("end_time")
+        if not end_time:
+            continue
+        
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        if end_time < now:
+            await db.events.delete_one({"_id": event["_id"]})
+            deleted_count += 1
+    
+    return {"message": f"Deleted {deleted_count} expired events", "deleted_count": deleted_count}
+
+
 @app.get("/api/debug/all-events")
 async def debug_all_events():
     """List all events for debugging"""
