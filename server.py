@@ -964,12 +964,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
      
     return result
 
-@app.get("/api/events/nearby")
-async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
-    logger.info(f"🗺️ Nearby events called: lat={latitude}, lng={longitude}, radius={radius_km}")
-    
-    try:
-        await db.events.create_index([("location", "2dsphere")])
+
 
 @app.get("/api/events/{event_id}")
 async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
