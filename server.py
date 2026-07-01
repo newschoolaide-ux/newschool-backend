@@ -916,8 +916,7 @@ async def get_events(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/events/nearby")
 async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
-    await db.events.create_index([("location", "2dsphere")])
-    await db.users.create_index([("last_location", "2dsphere")])
+    
     
     # Get current time with timezone awareness
     now = datetime.now(timezone.utc)
