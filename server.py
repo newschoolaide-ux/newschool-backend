@@ -17,7 +17,7 @@ import resend
 import string
 
 # Resend configuration
-resend.api_key = "re_AHvA6Tj3_2o4KjKhBp31tsYHVH5ueqwxe"
+resend.api_key = os.getenv("RESEND_API_KEY")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -695,8 +695,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "languages": current_user.get("languages", []),
         "bio": current_user.get("bio", ""),
         "photo": current_user.get("photo"),
-        "create_credit": current_user.get("create_credit", 1),
-        "join_credit": current_user.get("join_credit", 3),
+        "create_credit": 999,  # New School est gratuit : créations illimitées
+        "join_credit": 999,  # participations illimitées
         "created_at": current_user.get("created_at").isoformat() if current_user.get("created_at") else None
     
     }
@@ -790,8 +790,6 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
 
 @app.post("/api/events")
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
-    if current_user.get("create_credit", 0) <= 0:
-        raise HTTPException(status_code=403, detail="No create credits left")
     event_id = generate_event_id()
     start_time = datetime.utcnow()
     if event.duration_days and event.duration_days > 0:
@@ -820,7 +818,6 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "created_at": datetime.utcnow()
     }
     await db.events.insert_one(event_doc)
-    await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"create_credit": -1}})
     
     # 🔔 Notifier les utilisateurs proches (dans un rayon de 20km)
     try:
@@ -1043,8 +1040,6 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Already joined")
     if len(event.get("participants", [])) >= event.get("max_participants", 50):
         raise HTTPException(status_code=400, detail="Event is full")
-    if current_user.get("join_credit", 0) <= 0:
-        raise HTTPException(status_code=403, detail="No join credits left")
     
     # Check gender filter
     gender_filter = event.get("gender_filter", "all")
@@ -1059,7 +1054,6 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
             raise HTTPException(status_code=403, detail="This event is for men only")
     
     await db.events.update_one({"_id": event_id}, {"$push": {"participants": current_user["_id"]}})
-    await db.users.update_one({"_id": current_user["_id"]}, {"$inc": {"join_credit": -1}})
     
     # Send push notification to event creator
     creator = await db.users.find_one({"_id": event["creator_id"]})
@@ -1256,9 +1250,7 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
     return [
-        {"tier": "free", "price": 0, "monthly_limit": 4, "tagline": "Découvrez New School", "features": ["3 participations/mois", "1 création/mois"]},
-        {"tier": "standard", "price": 4.99, "monthly_limit": 5, "tagline": "Multipliez les rencontres", "features": ["3 participations/mois", "2 créations/mois"]},
-        {"tier": "ambassador", "price": 6.99, "monthly_limit": 999, "tagline": "Accès illimité", "features": ["Participations illimitées", "Créations illimitées"]}
+        {"tier": "free", "price": 0, "monthly_limit": 999, "tagline": "New School est 100 % gratuit", "features": ["Participations illimitées", "Créations illimitées"]}
     ]
 
 
