@@ -15,6 +15,12 @@ import httpx
 import random
 import resend
 import string
+import asyncio
+import base64
+import io
+import re
+import html as html_lib
+from zoneinfo import ZoneInfo
 
 # Resend configuration
 resend.api_key = os.getenv("RESEND_API_KEY")
@@ -32,97 +38,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.delete("/api/admin/cleanup-expired-events")
-async def cleanup_expired_events():
-    """Delete all expired events to free up disk space"""
-    now = datetime.now(timezone.utc)
-    
-    # Find expired events
-    expired_events = await db.events.find({}).to_list(1000)
-    
-    deleted_count = 0
-    for event in expired_events:
-        end_time = event.get("end_time")
-        if not end_time:
-            continue
-        
-        if isinstance(end_time, str):
-            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-        if end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-        
-        if end_time < now:
-            await db.events.delete_one({"_id": event["_id"]})
-            deleted_count += 1
-    
-    return {"message": f"Deleted {deleted_count} expired events", "deleted_count": deleted_count}
-
-
-@app.get("/api/debug/all-events")
-async def debug_all_events():
-    """List all events for debugging"""
-    now = datetime.now(timezone.utc)
-    events = await db.events.find({}).to_list(100)
-    result = []
-    for e in events:
-        end_time = e.get("end_time")
-        if isinstance(end_time, str):
-            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-        elif end_time and end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-        
-        is_expired = end_time < now if end_time else True
-        
-        result.append({
-            "id": e.get("_id"),
-            "name": e.get("name"),
-            "end_time": str(e.get("end_time")),
-            "is_expired": is_expired,
-            "has_location": e.get("location") is not None
-        })
-    return {"server_time_utc": str(now), "total_events": len(result), "events": result}
-
-@app.get("/api/debug/nearby-test")
-async def debug_nearby_test():
-    """Test nearby query with Paris coordinates"""
-    # Paris coordinates (where the Google event is)
-    latitude = 48.858247
-    longitude = 2.346296
-    radius_km = 50
-    
-    now = datetime.now(timezone.utc)
-    
-    # Same query as the real endpoint
-    events = await db.events.find({
-        "location": {
-            "$nearSphere": {
-                "$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, 
-                "$maxDistance": radius_km * 1000
-            }
-        }
-    }).to_list(100)
-    
-    result = []
-    for e in events:
-        end_time = e.get("end_time")
-        if isinstance(end_time, str):
-            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
-        elif end_time and end_time.tzinfo is None:
-            end_time = end_time.replace(tzinfo=timezone.utc)
-        
-        is_expired = end_time < now if end_time else True
-        
-        result.append({
-            "id": e.get("_id"),
-            "name": e.get("name"),
-            "end_time": str(e.get("end_time")),
-            "is_expired": is_expired,
-            "would_be_filtered": is_expired or not e.get("end_time")
-        })
-    
-    return {"total_from_geo_query": len(events), "events": result}
-
-
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
@@ -132,6 +47,69 @@ ACCESS_TOKEN_EXPIRE_DAYS = 30
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 client = AsyncIOMotorClient(MONGO_URL)
 db = client.newschool
+
+# ============ PHOTOS : compression ============
+# Les photos arrivent de l'app en base64, à la taille d'origine du téléphone (souvent plus de 1 Mo).
+# On les réduit avant de les enregistrer : c'est ce qui remplissait la base de données.
+try:
+    from PIL import Image, ImageOps
+except ImportError:  # Pillow absent : on garde les photos telles quelles
+    Image = None
+
+PHOTO_VERSION = 2
+EVENT_PHOTO_SIDE = 1280
+AVATAR_SIDE = 512
+
+def compress_photo(data, max_side=EVENT_PHOTO_SIDE, quality=72):
+    """Réduit une photo base64 (data URI ou base64 brut) en JPEG de max_side pixels au plus.
+    Renvoie un data URI. En cas d'échec, renvoie la photo d'origine."""
+    if not data or Image is None or not isinstance(data, str):
+        return data
+    try:
+        raw = data.split(",", 1)[1] if data.startswith("data:") else data
+        img = Image.open(io.BytesIO(base64.b64decode(raw)))
+        img = ImageOps.exif_transpose(img)
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            bg = Image.new("RGB", img.size, (12, 10, 18))
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        img.thumbnail((max_side, max_side))
+        out = io.BytesIO()
+        img.save(out, "JPEG", quality=quality, optimize=True, progressive=True)
+        new = "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode()
+        return new if len(new) < len(data) else data
+    except Exception as e:
+        logger.warning(f"Photo non compressée : {e}")
+        return data
+
+async def compress_photo_async(data, max_side=EVENT_PHOTO_SIDE):
+    return await asyncio.to_thread(compress_photo, data, max_side)
+
+async def compact_existing_photos():
+    """Compresse une fois les photos déjà enregistrées (Schools et profils). Sans effet au redémarrage suivant."""
+    saved = 0
+    try:
+        for coll, field, side in ((db.events, "photo_base64", EVENT_PHOTO_SIDE), (db.users, "photo", AVATAR_SIDE)):
+            ids = [d["_id"] async for d in coll.find({field: {"$type": "string"}, "photo_v": {"$ne": PHOTO_VERSION}}, {"_id": 1})]
+            for _id in ids:
+                doc = await coll.find_one({"_id": _id}, {field: 1})
+                old = (doc or {}).get(field)
+                if not old:
+                    continue
+                new = await compress_photo_async(old, side)
+                saved += len(old) - len(new)
+                await coll.update_one({"_id": _id}, {"$set": {field: new, "photo_v": PHOTO_VERSION}})
+            logger.info(f"Photos compressées dans {coll.name} : {len(ids)}")
+        logger.info(f"Compression des photos terminée : {saved / 1_000_000:.1f} Mo économisés")
+    except Exception as e:
+        logger.error(f"Compression des photos interrompue : {e}")
+
+@app.on_event("startup")
+async def start_photo_compaction():
+    asyncio.create_task(compact_existing_photos())
 
 ADMIN_EMAIL = "newschool@ab-digital1.com"
 
@@ -184,6 +162,7 @@ class ProfileUpdate(BaseModel):
     languages: Optional[List[str]] = []
     gender: Optional[str] = None
     birth_year: Optional[int] = None
+    campus: Optional[str] = None
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
@@ -210,6 +189,104 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
+async def require_admin(current_user: dict = Depends(get_current_user)):
+    """Réservé au compte administrateur."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    return current_user
+
+@app.delete("/api/admin/cleanup-expired-events")
+async def cleanup_expired_events(admin: dict = Depends(require_admin)):
+    """Delete all expired events to free up disk space"""
+    now = datetime.now(timezone.utc)
+    
+    # Find expired events
+    expired_events = await db.events.find({}).to_list(1000)
+    
+    deleted_count = 0
+    for event in expired_events:
+        end_time = event.get("end_time")
+        if not end_time:
+            continue
+        
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        if end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        if end_time < now:
+            await db.events.delete_one({"_id": event["_id"]})
+            deleted_count += 1
+    
+    return {"message": f"Deleted {deleted_count} expired events", "deleted_count": deleted_count}
+
+
+@app.get("/api/debug/all-events")
+async def debug_all_events(admin: dict = Depends(require_admin)):
+    """List all events for debugging"""
+    now = datetime.now(timezone.utc)
+    events = await db.events.find({}).to_list(100)
+    result = []
+    for e in events:
+        end_time = e.get("end_time")
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        elif end_time and end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        is_expired = end_time < now if end_time else True
+        
+        result.append({
+            "id": e.get("_id"),
+            "name": e.get("name"),
+            "end_time": str(e.get("end_time")),
+            "is_expired": is_expired,
+            "has_location": e.get("location") is not None
+        })
+    return {"server_time_utc": str(now), "total_events": len(result), "events": result}
+
+@app.get("/api/debug/nearby-test")
+async def debug_nearby_test(admin: dict = Depends(require_admin)):
+    """Test nearby query with Paris coordinates"""
+    # Paris coordinates (where the Google event is)
+    latitude = 48.858247
+    longitude = 2.346296
+    radius_km = 50
+    
+    now = datetime.now(timezone.utc)
+    
+    # Same query as the real endpoint
+    events = await db.events.find({
+        "location": {
+            "$nearSphere": {
+                "$geometry": {"type": "Point", "coordinates": [longitude, latitude]}, 
+                "$maxDistance": radius_km * 1000
+            }
+        }
+    }).to_list(100)
+    
+    result = []
+    for e in events:
+        end_time = e.get("end_time")
+        if isinstance(end_time, str):
+            end_time = datetime.fromisoformat(end_time.replace('Z', '+00:00'))
+        elif end_time and end_time.tzinfo is None:
+            end_time = end_time.replace(tzinfo=timezone.utc)
+        
+        is_expired = end_time < now if end_time else True
+        
+        result.append({
+            "id": e.get("_id"),
+            "name": e.get("name"),
+            "end_time": str(e.get("end_time")),
+            "is_expired": is_expired,
+            "would_be_filtered": is_expired or not e.get("end_time")
+        })
+    
+    return {"total_from_geo_query": len(events), "events": result}
+
+
 async def send_push_notification(push_token: str, title: str, body: str, data: dict = None):
     """Send push notification via Expo"""
     try:
@@ -327,7 +404,102 @@ async def send_admin_notification(user_email: str, first_name: str):
  
 # ============ REFERRAL LANDING PAGE ============
 
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+
+# ============ PARTAGE D'UNE SCHOOL ============
+PUBLIC_URL = os.getenv("PUBLIC_URL", "https://newschool-backend-production.up.railway.app").rstrip("/")
+APP_STORE_URL = "https://apps.apple.com/us/app/new-school-app/id6760179312"
+PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.newschoolaide.app"
+PARIS = ZoneInfo("Europe/Paris")
+JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+
+def _as_utc(d):
+    if isinstance(d, str):
+        d = datetime.fromisoformat(d.replace("Z", "+00:00"))
+    return d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d
+
+def _heure(d):
+    return f"{d.hour}h{d.minute:02d}" if d.minute else f"{d.hour}h"
+
+def school_when(event):
+    now = datetime.now(timezone.utc)
+    start = _as_utc(event.get("start_time", now))
+    end = _as_utc(event.get("end_time", start + timedelta(hours=2)))
+    if end < now:
+        return "Cette School est terminée", False
+    s, e = start.astimezone(PARIS), end.astimezone(PARIS)
+    if start <= now:
+        return f"En ce moment · jusqu'à {_heure(e)}", True
+    return f"{JOURS[s.weekday()].capitalize()} {s.day} {MOIS[s.month - 1]} à {_heure(s)}", True
+
+@app.get("/s/{event_id}/image.jpg")
+async def share_image(event_id: str):
+    event = await db.events.find_one({"_id": event_id}, {"photo_base64": 1})
+    data = (event or {}).get("photo_base64")
+    if not data:
+        raise HTTPException(status_code=404, detail="Pas de photo")
+    raw = data.split(",", 1)[1] if data.startswith("data:") else data
+    return Response(content=base64.b64decode(raw), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
+
+@app.get("/s/{event_id}", response_class=HTMLResponse)
+async def share_page(event_id: str):
+    """Page web d'une School partagée : aperçu WhatsApp/Instagram, puis ouverture de l'app ou téléchargement."""
+    event = await db.events.find_one({"_id": event_id}, {"photo_base64": 0})
+    esc = html_lib.escape
+    if not event:
+        name, when, place, count, theme, active, has_photo = "School introuvable", "Ce lien n'est plus valable", "", "", "", False, False
+    else:
+        when, active = school_when(event)
+        name = event.get("name", "School")
+        place = event.get("address", "")
+        n, mx = len(event.get("participants", [])), event.get("max_participants", 50)
+        count = f"{n}/{mx} participants"
+        theme = event.get("theme") or ""
+        has_photo = bool(await db.events.count_documents({"_id": event_id, "photo_base64": {"$type": "string"}}))
+    desc = " · ".join(x for x in (when, place, count) if x) + " · Rejoins-la sur New School, l'app gratuite des sorties spontanées."
+    url = f"{PUBLIC_URL}/s/{event_id}"
+    og_image = f'<meta property="og:image" content="{PUBLIC_URL}/s/{esc(event_id)}/image.jpg">' if has_photo else ""
+    hero = f'<img class="photo" src="/s/{esc(event_id)}/image.jpg" alt="">' if has_photo else '<div class="photo empty"></div>'
+    open_btn = f'<a class="btn primary" href="newschool://event/{esc(event_id)}">Ouvrir dans New School</a>' if active else ""
+    page = f"""<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{esc(name)} · New School</title>
+<meta property="og:type" content="website"><meta property="og:site_name" content="New School">
+<meta property="og:title" content="{esc(name)}"><meta property="og:description" content="{esc(desc)}"><meta property="og:url" content="{esc(url)}">
+{og_image}<meta name="twitter:card" content="summary_large_image"><meta name="description" content="{esc(desc)}">
+<meta name="apple-itunes-app" content="app-id=6760179312, app-argument=newschool://event/{esc(event_id)}">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,800&family=Plus+Jakarta+Sans:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{{--bg:#0C0A12;--surface:#16131F;--line:rgba(255,255,255,.1);--text:#F5F3FA;--muted:#A39DB3;--accent:#D946EF;--on:#1A0820;--live:#4ADE80}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font-family:"Plus Jakarta Sans",system-ui,sans-serif;min-height:100vh;display:flex;justify-content:center;padding:24px max(16px,env(safe-area-inset-right)) 32px max(16px,env(safe-area-inset-left))}}
+main{{width:100%;max-width:420px;display:flex;flex-direction:column;gap:18px}}
+.brand{{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:800;font-size:20px}}
+.card{{background:var(--surface);border:1px solid var(--line);border-radius:24px;overflow:hidden}}
+.photo{{display:block;width:100%;height:220px;object-fit:cover;background:#2A1A2F}}.photo.empty{{background:linear-gradient(135deg,#3A1B44,#16131F)}}
+.body{{padding:18px 18px 20px;display:flex;flex-direction:column;gap:8px}}
+.tag{{align-self:flex-start;background:var(--accent);color:var(--on);border-radius:999px;padding:5px 11px;font-size:13px;font-weight:700}}
+h1{{font-family:"Bricolage Grotesque",system-ui,sans-serif;font-weight:800;font-size:28px;line-height:1.1;margin:4px 0 0;text-wrap:balance}}
+.when{{color:var(--live);font-weight:700;font-size:15px}}.meta{{color:var(--muted);font-size:15px}}
+.btn{{display:block;text-align:center;text-decoration:none;font-weight:700;font-size:16px;border-radius:999px;padding:16px;border:1.5px solid var(--line);color:var(--text)}}
+.btn.primary{{background:var(--accent);border-color:var(--accent);color:var(--on)}}
+.stores{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+p.note{{color:var(--muted);font-size:13px;text-align:center;margin:0}}
+</style></head><body><main>
+<div class="brand">New School</div>
+<div class="card">{hero}<div class="body">{f'<span class="tag">{esc(theme)}</span>' if theme else ''}<h1>{esc(name)}</h1><div class="when">{esc(when)}</div>
+{f'<div class="meta">{esc(place)}</div>' if place else ''}{f'<div class="meta">{esc(count)}</div>' if count else ''}</div></div>
+{open_btn}
+<div class="stores"><a class="btn" href="{APP_STORE_URL}">App Store</a><a class="btn" href="{PLAY_STORE_URL}">Google Play</a></div>
+<p class="note">Pas encore l'app ? Télécharge-la gratuitement, puis rouvre ce lien pour rejoindre la School.</p>
+</main></body></html>"""
+    return HTMLResponse(content=page)
+
+@app.get("/api/admin/storage")
+async def admin_storage(admin: dict = Depends(require_admin)):
+    """Place occupée par la base de données, pour surveiller la limite de l'hébergeur."""
+    stats = await db.command("dbStats")
+    return {k: stats.get(k) for k in ("collections", "objects", "dataSize", "storageSize", "indexSize")}
 
 @app.get("/invite/{referral_code}", response_class=HTMLResponse)
 async def referral_landing_page(referral_code: str):
@@ -695,6 +867,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "languages": current_user.get("languages", []),
         "bio": current_user.get("bio", ""),
         "photo": current_user.get("photo"),
+        "campus": current_user.get("campus") or None,
         "create_credit": 999,  # New School est gratuit : créations illimitées
         "join_credit": 999,  # participations illimitées
         "created_at": current_user.get("created_at").isoformat() if current_user.get("created_at") else None
@@ -712,6 +885,7 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
         "photo": user.get("photo"),
         "bio": user.get("bio", ""),
         "languages": user.get("languages", []),
+        "campus": user.get("campus") or None,
         "created_at": user.get("created_at").isoformat() if user.get("created_at") else None
     }
 class PushTokenRequest(BaseModel):
@@ -773,7 +947,10 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
     if data.phone is not None:
         update_data["phone"] = data.phone
     if data.photo is not None:
-        update_data["photo"] = data.photo
+        update_data["photo"] = await compress_photo_async(data.photo, AVATAR_SIDE)
+        update_data["photo_v"] = PHOTO_VERSION
+    if data.campus is not None:
+        update_data["campus"] = data.campus.strip()[:60]
     if data.languages is not None:
         update_data["languages"] = data.languages
     if data.gender is not None:
@@ -797,7 +974,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
     else:
         end_time = start_time + timedelta(hours=event.duration_hours or 2)
     address = event.location_name or event.address or ""
-    photo_data = event.photo or event.photo_base64
+    photo_data = await compress_photo_async(event.photo or event.photo_base64)
     event_doc = {
         "_id": event_id,
         "name": event.name,
@@ -815,6 +992,8 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "age_ranges": event.age_ranges or [],
         "desired_nationalities": event.desired_nationalities or [],
         "photo_base64": photo_data,
+        "photo_v": PHOTO_VERSION,
+        "campus": current_user.get("campus") or None,
         "created_at": datetime.utcnow()
     }
     await db.events.insert_one(event_doc)
@@ -868,8 +1047,18 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "created_at": datetime.utcnow().isoformat()
     }
 @app.get("/api/events")
-async def get_events(current_user: dict = Depends(get_current_user)):
-    events = await db.events.find().sort("start_time", 1).to_list(100)
+async def get_events(theme: Optional[str] = None, search: Optional[str] = None, campus: Optional[str] = None,
+                     current_user: dict = Depends(get_current_user)):
+    # Seulement les Schools pas encore terminées, avec les filtres de l'écran Explorer
+    query = {"end_time": {"$gt": datetime.utcnow()}}
+    if theme:
+        query["theme"] = theme
+    if campus:
+        query["campus"] = campus
+    if search and search.strip():
+        rx = {"$regex": re.escape(search.strip()[:60]), "$options": "i"}
+        query["$or"] = [{"name": rx}, {"description": rx}, {"address": rx}]
+    events = await db.events.find(query).sort("start_time", 1).to_list(100)
     result = []
     for e in events:
         participant_ids = e.get("participants", [])
@@ -904,6 +1093,7 @@ async def get_events(current_user: dict = Depends(get_current_user)):
             "max_participants": e.get("max_participants", 50),
             "is_full": len(participant_ids) >= e.get("max_participants", 50),
             "theme": e.get("theme", "general"),
+            "campus": e.get("campus"),
             "photo": e.get("photo_base64"),
             "desired_nationalities": e.get("desired_nationalities", []),
             "status": "active",
@@ -977,6 +1167,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "max_participants": e.get("max_participants", 50),
             "is_full": len(participant_ids) >= e.get("max_participants", 50),
             "theme": e.get("theme", "general"),
+            "campus": e.get("campus"),
             "photo": e.get("photo_base64"),
             "desired_nationalities": e.get("desired_nationalities", []),
             "status": "active",
@@ -1025,6 +1216,7 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
         "max_participants": event.get("max_participants", 50),
         "is_full": len(participant_ids) >= event.get("max_participants", 50),
         "theme": event.get("theme", "general"),
+        "campus": event.get("campus"),
         "photo": event.get("photo_base64"),
         "desired_nationalities": event.get("desired_nationalities", []),
         "status": "active",
@@ -1095,7 +1287,7 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
         raise HTTPException(status_code=403, detail="Only the creator can edit this event")
     
     address = event.location_name or event.address or ""
-    photo_data = event.photo or event.photo_base64
+    photo_data = await compress_photo_async(event.photo or event.photo_base64)
     
     update_data = {
         "name": event.name,
@@ -1111,6 +1303,7 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
     
     if photo_data:
         update_data["photo_base64"] = photo_data
+        update_data["photo_v"] = PHOTO_VERSION
     
     if event.duration_days and event.duration_days > 0:
         update_data["end_time"] = existing_event["start_time"] + timedelta(days=event.duration_days)
@@ -1404,7 +1597,7 @@ def generate_referral_code():
     return ''.join(secrets.choice(chars) for _ in range(8))
 
 @app.post("/api/referral/generate-codes")
-async def generate_referral_codes_for_all_users():
+async def generate_referral_codes_for_all_users(admin: dict = Depends(require_admin)):
     """Generate referral codes for all users who don't have one"""
     users_without_code = await db.users.find({"referral_code": {"$exists": False}}).to_list(1000)
     
@@ -1494,10 +1687,10 @@ async def register_with_referral(email: str, password: str, first_name: str, ref
     return {"message": "User registered successfully", "user_id": user_id}
 
 @app.post("/api/admin/send-referral-campaign")
-async def send_referral_campaign(apple_only: bool = False):
+async def send_referral_campaign(apple_only: bool = False, admin: dict = Depends(require_admin)):
     """Send referral campaign email to all users"""
     # First, generate codes for all users
-    await generate_referral_codes_for_all_users()
+    await generate_referral_codes_for_all_users(admin)
     
     # Get all users with email
     if apple_only:
