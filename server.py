@@ -410,6 +410,16 @@ from fastapi.responses import HTMLResponse, Response
 PUBLIC_URL = os.getenv("PUBLIC_URL", "https://newschool-backend-production.up.railway.app").rstrip("/")
 APP_STORE_URL = "https://apps.apple.com/us/app/new-school-app/id6760179312"
 PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.newschoolaide.app"
+def iso(d):
+    """Date envoyée à l'app : toujours avec le fuseau UTC, pour que le téléphone l'affiche à l'heure locale."""
+    if d is None:
+        return None
+    if isinstance(d, str):
+        return d
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.isoformat().replace("+00:00", "Z")
+
 PARIS = ZoneInfo("Europe/Paris")
 JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
 MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
@@ -870,7 +880,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "campus": current_user.get("campus") or None,
         "create_credit": 999,  # New School est gratuit : créations illimitées
         "join_credit": 999,  # participations illimitées
-        "created_at": current_user.get("created_at").isoformat() if current_user.get("created_at") else None
+        "created_at": iso(current_user.get("created_at")) if current_user.get("created_at") else None
     
     }
 @app.get("/api/users/{user_id}")
@@ -886,7 +896,7 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
         "bio": user.get("bio", ""),
         "languages": user.get("languages", []),
         "campus": user.get("campus") or None,
-        "created_at": user.get("created_at").isoformat() if user.get("created_at") else None
+        "created_at": iso(user.get("created_at")) if user.get("created_at") else None
     }
 class PushTokenRequest(BaseModel):
     push_token: str
@@ -1030,13 +1040,13 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "longitude": event.longitude,
         "location_name": address,
         "address": address,
-        "start_time": start_time.isoformat(),
-        "end_time": end_time.isoformat(),
+        "start_time": iso(start_time),
+        "end_time": iso(end_time),
         "duration_hours": event.duration_hours or 2,
         "creator_id": current_user["_id"],
         "creator_name": current_user.get("first_name", ""),
         "creator_photo": current_user.get("photo"),
-        "participants": [{"user_id": current_user["_id"], "first_name": current_user.get("first_name", "User"), "photo": current_user.get("photo"), "joined_at": datetime.utcnow().isoformat()}],
+        "participants": [{"user_id": current_user["_id"], "first_name": current_user.get("first_name", "User"), "photo": current_user.get("photo"), "joined_at": iso(datetime.utcnow())}],
         "current_participants": 1,
         "max_participants": event.max_participants or 50,
         "is_full": False,
@@ -1044,7 +1054,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "photo": photo_data,
         "desired_nationalities": event.desired_nationalities or [],
         "status": "active",
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": iso(datetime.utcnow())
     }
 @app.get("/api/events")
 async def get_events(theme: Optional[str] = None, search: Optional[str] = None, campus: Optional[str] = None,
@@ -1066,7 +1076,7 @@ async def get_events(theme: Optional[str] = None, search: Optional[str] = None, 
         for pid in participant_ids:
             user = await db.users.find_one({"_id": pid})
             if user:
-                participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": e.get("created_at", datetime.utcnow()).isoformat()})
+                participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": iso(e.get("created_at", datetime.utcnow()))})
         creator = await db.users.find_one({"_id": e["creator_id"]})
         creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
         creator_photo = creator.get("photo") if creator else None
@@ -1082,8 +1092,8 @@ async def get_events(theme: Optional[str] = None, search: Optional[str] = None, 
             "longitude": e["location"]["coordinates"][0],
             "location_name": e.get("address", ""),
             "address": e.get("address", ""),
-            "start_time": e["start_time"].isoformat(),
-            "end_time": e["end_time"].isoformat(),
+            "start_time": iso(e["start_time"]),
+            "end_time": iso(e["end_time"]),
             "duration_hours": duration_hours,
             "creator_id": e["creator_id"],
             "creator_name": creator_name,
@@ -1097,7 +1107,7 @@ async def get_events(theme: Optional[str] = None, search: Optional[str] = None, 
             "photo": e.get("photo_base64"),
             "desired_nationalities": e.get("desired_nationalities", []),
             "status": "active",
-            "created_at": e.get("created_at", datetime.utcnow()).isoformat()
+            "created_at": iso(e.get("created_at", datetime.utcnow()))
         })
     return result
 
@@ -1140,7 +1150,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
         for pid in participant_ids:
             user = await db.users.find_one({"_id": pid})
             if user:
-                participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": e.get("created_at", datetime.utcnow()).isoformat()})
+                participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": iso(e.get("created_at", datetime.utcnow()))})
         creator = await db.users.find_one({"_id": e["creator_id"]})
         creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
         creator_photo = creator.get("photo") if creator else None
@@ -1156,8 +1166,8 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "longitude": e["location"]["coordinates"][0],
             "location_name": e.get("address", ""),
             "address": e.get("address", ""),
-            "start_time": e["start_time"].isoformat(),
-            "end_time": e["end_time"].isoformat(),
+            "start_time": iso(e["start_time"]),
+            "end_time": iso(e["end_time"]),
             "duration_hours": duration_hours,
             "creator_id": e["creator_id"],
             "creator_name": creator_name,
@@ -1171,7 +1181,7 @@ async def get_nearby_events(latitude: float, longitude: float, radius_km: float 
             "photo": e.get("photo_base64"),
             "desired_nationalities": e.get("desired_nationalities", []),
             "status": "active",
-            "created_at": e.get("created_at", datetime.utcnow()).isoformat()
+            "created_at": iso(e.get("created_at", datetime.utcnow()))
         })
     logger.info(f"🗺️ Returning {len(result)} events")
      
@@ -1189,7 +1199,7 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     for pid in participant_ids:
         user = await db.users.find_one({"_id": pid})
         if user:
-            participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": event.get("created_at", datetime.utcnow()).isoformat()})
+            participants_data.append({"user_id": pid, "first_name": user.get("first_name", "User"), "photo": user.get("photo"), "joined_at": iso(event.get("created_at", datetime.utcnow()))})
     creator = await db.users.find_one({"_id": event["creator_id"]})
     creator_name = creator.get("first_name", "Organisateur") if creator else "Organisateur"
     creator_photo = creator.get("photo") if creator else None
@@ -1205,8 +1215,8 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
         "longitude": event["location"]["coordinates"][0],
         "location_name": event.get("address", ""),
         "address": event.get("address", ""),
-        "start_time": event["start_time"].isoformat(),
-        "end_time": event["end_time"].isoformat(),
+        "start_time": iso(event["start_time"]),
+        "end_time": iso(event["end_time"]),
         "duration_hours": duration_hours,
         "creator_id": event["creator_id"],
         "creator_name": creator_name,
@@ -1220,7 +1230,7 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
         "photo": event.get("photo_base64"),
         "desired_nationalities": event.get("desired_nationalities", []),
         "status": "active",
-        "created_at": event.get("created_at", datetime.utcnow()).isoformat()
+        "created_at": iso(event.get("created_at", datetime.utcnow()))
     }
 
 @app.post("/api/events/{event_id}/join")
@@ -1351,12 +1361,12 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
 @app.get("/api/events/user/created")
 async def get_user_created_events(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"creator_id": current_user["_id"]}).to_list(50)
-    return [{"event_id": e["_id"], "id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "current_participants": len(e.get("participants", [])), "max_participants": e.get("max_participants", 50)} for e in events]
+    return [{"event_id": e["_id"], "id": e["_id"], "name": e["name"], "start_time": iso(e["start_time"]), "current_participants": len(e.get("participants", [])), "max_participants": e.get("max_participants", 50)} for e in events]
 
 @app.get("/api/events/user/joined")
 async def get_user_joined_events(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"participants": current_user["_id"]}).to_list(50)
-    return [{"event_id": e["_id"], "id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "current_participants": len(e.get("participants", [])), "max_participants": e.get("max_participants", 50)} for e in events]
+    return [{"event_id": e["_id"], "id": e["_id"], "name": e["name"], "start_time": iso(e["start_time"]), "current_participants": len(e.get("participants", [])), "max_participants": e.get("max_participants", 50)} for e in events]
 
 
 @app.get("/api/events/{event_id}/messages")
@@ -1373,7 +1383,7 @@ async def get_messages(event_id: str, current_user: dict = Depends(get_current_u
             "sender_photo": sender.get("photo") if sender else None,
             "content": m["content"],
             "message_type": "text",
-            "created_at": m["timestamp"].isoformat(),
+            "created_at": iso(m["timestamp"]),
             "is_read": True
         })
     return result
@@ -1413,7 +1423,7 @@ async def send_message(event_id: str, message: MessageCreate, current_user: dict
         "sender_photo": current_user.get("photo"),
         "content": message.content,
         "message_type": "text",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": iso(datetime.utcnow()),
         "is_read": False
     }
 
@@ -1428,7 +1438,7 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
             last_message_data = {
                 "content": last_message["content"],
                 "sender_name": last_message.get("user_name", ""),
-                "created_at": last_message["timestamp"].isoformat()
+                "created_at": iso(last_message["timestamp"])
             }
         chats.append({
             "event_id": event["_id"],
@@ -1513,7 +1523,7 @@ async def sync_subscription(data: SubscriptionUpgrade, current_user: dict = Depe
 @app.get("/api/users/history")
 async def get_user_history(current_user: dict = Depends(get_current_user)):
     events = await db.events.find({"participants": current_user["_id"], "end_time": {"$lt": datetime.utcnow()}}).sort("end_time", -1).to_list(50)
-    return [{"id": e["_id"], "name": e["name"], "start_time": e["start_time"].isoformat(), "end_time": e["end_time"].isoformat(), "theme": e.get("theme", "general")} for e in events]
+    return [{"id": e["_id"], "name": e["name"], "start_time": iso(e["start_time"]), "end_time": iso(e["end_time"]), "theme": e.get("theme", "general")} for e in events]
 
 @app.get("/api/health")
 async def health():
@@ -1570,7 +1580,7 @@ async def get_admin_users(current_user: dict = Depends(get_current_user)):
         "first_name": u.get("first_name", ""),
         "subscription_tier": u.get("subscription_tier", "free"),
         "is_banned": u.get("is_banned", False),
-        "created_at": u.get("created_at").isoformat() if u.get("created_at") else None
+        "created_at": iso(u.get("created_at")) if u.get("created_at") else None
     } for u in users]
 
 @app.get("/api/admin/reports")
@@ -1586,7 +1596,7 @@ async def get_admin_reports(current_user: dict = Depends(get_current_user)):
         "event_id": r.get("event_id"),
         "reason": r.get("reason", ""),
         "status": r.get("status", "pending"),
-        "created_at": r.get("created_at").isoformat() if r.get("created_at") else None
+        "created_at": iso(r.get("created_at")) if r.get("created_at") else None
     } for r in reports]
 
 # ======================= REFERRAL SYSTEM =======================
