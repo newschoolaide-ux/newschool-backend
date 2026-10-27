@@ -404,7 +404,8 @@ async def send_admin_notification(user_email: str, first_name: str):
  
 # ============ REFERRAL LANDING PAGE ============
 
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, RedirectResponse
+from fastapi import Request
 
 # ============ PARTAGE D'UNE SCHOOL ============
 PUBLIC_URL = os.getenv("PUBLIC_URL", "https://newschool-backend-production.up.railway.app").rstrip("/")
@@ -502,6 +503,27 @@ p.note{{color:var(--muted);font-size:13px;text-align:center;margin:0}}
 {open_btn}
 <div class="stores"><a class="btn" href="{APP_STORE_URL}">App Store</a><a class="btn" href="{PLAY_STORE_URL}">Google Play</a></div>
 <p class="note">Pas encore l'app ? Télécharge-la gratuitement, puis rouvre ce lien pour rejoindre la School.</p>
+</main></body></html>"""
+    return HTMLResponse(content=page)
+
+@app.get("/app", response_class=HTMLResponse)
+@app.get("/telecharger", response_class=HTMLResponse)
+async def download_link(request: Request):
+    """Lien unique pour la bio TikTok/Instagram : iPhone -> App Store, Android -> Google Play, ordinateur -> page avec les deux."""
+    ua = (request.headers.get("user-agent") or "").lower()
+    if "android" in ua:
+        return RedirectResponse(PLAY_STORE_URL, status_code=302)
+    if any(k in ua for k in ("iphone", "ipad", "ipod")):
+        return RedirectResponse(APP_STORE_URL, status_code=302)
+    page = f"""<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>New School · Télécharger l'app</title><meta property="og:title" content="New School · Sors. Rencontre du monde. En vrai.">
+<meta property="og:description" content="Des sorties spontanées autour de toi. 100 % gratuit, sur iPhone et Android.">
+<style>body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0C0A12;color:#F5F3FA;font-family:-apple-system,system-ui,sans-serif}}
+main{{max-width:420px;padding:32px 20px;text-align:center}}h1{{font-size:34px;margin:0 0 10px}}p{{color:#A39DB3;margin:0 0 28px;line-height:1.5}}
+a{{display:block;padding:16px;border-radius:999px;margin:10px 0;font-weight:700;text-decoration:none;border:1.5px solid rgba(255,255,255,.22);color:#F5F3FA}}
+a.p{{background:#D946EF;border-color:#D946EF;color:#1A0820}}</style></head><body><main>
+<h1>New School</h1><p>Sors de chez toi. Rencontre du monde. En vrai.<br>100 % gratuit.</p>
+<a class="p" href="{APP_STORE_URL}">Télécharger sur l'App Store</a><a href="{PLAY_STORE_URL}">Télécharger sur Google Play</a>
 </main></body></html>"""
     return HTMLResponse(content=page)
 
