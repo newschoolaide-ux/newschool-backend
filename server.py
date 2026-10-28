@@ -141,6 +141,7 @@ class EventCreate(BaseModel):
     desired_nationalities: Optional[List[str]] = []
     photo: Optional[str] = None
     photo_base64: Optional[str] = None
+    start_time: Optional[str] = None   # School programmée (ISO 8601) ; vide = maintenant
 
 class MessageCreate(BaseModel):
     content: str
@@ -1001,6 +1002,16 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
     event_id = generate_event_id()
     start_time = datetime.utcnow()
+    if event.start_time:
+        # School programmée : on garde la date si elle est dans le futur (au plus 90 jours)
+        try:
+            wanted = datetime.fromisoformat(event.start_time.replace("Z", "+00:00"))
+            if wanted.tzinfo is not None:
+                wanted = wanted.astimezone(timezone.utc).replace(tzinfo=None)
+            if start_time < wanted <= start_time + timedelta(days=90):
+                start_time = wanted
+        except ValueError:
+            pass
     if event.duration_days and event.duration_days > 0:
         end_time = start_time + timedelta(days=event.duration_days)
     else:
