@@ -509,6 +509,97 @@ p.note{{color:var(--muted);font-size:13px;text-align:center;margin:0}}
 </main></body></html>"""
     return HTMLResponse(content=page)
 
+# ---------- Campagnes mail aux inscrits (avec désinscription) ----------
+import hmac, hashlib
+CAMPAIGN_KEY = os.getenv("CAMPAIGN_KEY")   # clé à mettre dans Railway ; sans elle, les campagnes sont désactivées
+
+def _unsub_token(uid: str) -> str:
+    return hmac.new(SECRET_KEY.encode(), f"unsub:{uid}".encode(), hashlib.sha256).hexdigest()[:24]
+
+def _unsub_link(uid: str) -> str:
+    return f"{PUBLIC_URL}/desabonnement/{uid}/{_unsub_token(uid)}"
+
+@app.get("/desabonnement/{uid}/{tok}", response_class=HTMLResponse)
+async def unsubscribe(uid: str, tok: str):
+    ok = hmac.compare_digest(tok, _unsub_token(uid))
+    if ok:
+        await db.users.update_one({"_id": uid}, {"$set": {"marketing_opt_out": True}})
+    msg = "C'est fait : tu ne recevras plus nos mails d'actualité." if ok else "Lien invalide."
+    return HTMLResponse(f"""<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>New School</title></head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0C0A12;color:#F5F3FA;font-family:-apple-system,system-ui,sans-serif">
+<main style="max-width:420px;padding:32px 20px;text-align:center"><h1 style="font-size:28px">New School</h1><p style="color:#A39DB3;line-height:1.5">{msg}</p></main></body></html>""")
+
+HALLOWEEN_EVENTS = [
+    ("La Commune", "DJ set années 90-2000", "3 rue Pré-Gaudry, Lyon 7e", "21h", "Gratuit"),
+    ("Le Lavoir Public", "Soirée Halloween", "4 impasse Flesselles, Lyon 1er", "19h", "dès 6 €"),
+    ("Mama Shelter", "Murder on the Dancefloor", "13 rue Domer, Lyon 7e", "dès 19h, DJ 21h30", ""),
+    ("Game In Lyon", "Soirée horreur « Hallo One Year »", "14 quai André Lassagne, Lyon 1er", "19h-23h", "29 €"),
+    ("Musée Cinéma & Miniature", "Museum Horror Night", "60 rue Saint-Jean, Lyon 5e", "19h30-23h", "29,90 €"),
+]
+
+def halloween_html(first_name: str, uid: str) -> str:
+    esc = html_lib.escape
+    rows = "".join(
+        f'<tr><td style="padding:14px 0;border-bottom:1px solid #2A2535"><div style="font-weight:700;font-size:17px;color:#F5F3FA">{esc(n)}</div>'
+        f'<div style="color:#D6D2E0;font-size:14px;margin-top:3px">{esc(w)}</div>'
+        f'<div style="color:#A39DB3;font-size:13px;margin-top:3px">📍 {esc(a)} · 🕘 {esc(h)}{" · " + esc(p) if p else ""}</div></td></tr>'
+        for n, w, a, h, p in HALLOWEEN_EVENTS)
+    hello = f"Salut {esc(first_name)} 👋" if first_name else "Salut 👋"
+    return f"""<!doctype html><html><body style="margin:0;background:#0C0A12;font-family:-apple-system,Segoe UI,Arial,sans-serif">
+<div style="max-width:560px;margin:0 auto;padding:28px 22px;color:#F5F3FA">
+<div style="font-size:13px;letter-spacing:1px;color:#FDBA74;font-weight:700">NEW SCHOOL · HALLOWEEN</div>
+<h1 style="font-size:28px;line-height:1.15;margin:12px 0 6px">🎃 Pas de plan pour Halloween ?</h1>
+<p style="color:#D6D2E0;font-size:16px;line-height:1.5;margin:0 0 6px">{hello}</p>
+<p style="color:#D6D2E0;font-size:16px;line-height:1.5;margin:0 0 18px">Voici 5 soirées à Lyon ce <b>samedi 31 octobre</b>, dont une gratuite :</p>
+<table style="width:100%;border-collapse:collapse">{rows}</table>
+<div style="background:#16131F;border:1px solid #D946EF;border-radius:18px;padding:18px;margin:24px 0">
+<div style="font-weight:700;font-size:17px">Personne pour y aller ?</div>
+<div style="color:#D6D2E0;font-size:15px;line-height:1.5;margin-top:6px">Crée une School « On va à La Commune samedi, qui vient ? » : les gens autour de toi la voient sur la carte et peuvent te rejoindre. Il y en a déjà une pour La Commune samedi 21h 😉</div>
+</div>
+<div style="text-align:center;margin:26px 0"><a href="{PUBLIC_URL}/app" style="display:inline-block;background:#D946EF;color:#1A0820;font-weight:800;font-size:16px;text-decoration:none;padding:15px 28px;border-radius:999px">Ouvrir New School</a></div>
+<p style="color:#8E889E;font-size:13px;line-height:1.5">Nouveau dans l'app : New School est 100 % gratuite, et tu peux choisir ton campus pour voir les sorties des étudiants de ton école.</p>
+<p style="color:#8E889E;font-size:12px;line-height:1.5;margin-top:26px;border-top:1px solid #2A2535;padding-top:14px">Tu reçois ce mail car tu as un compte New School. Une question : réponds simplement à ce mail.<br>
+<a href="{_unsub_link(uid)}" style="color:#8E889E">Ne plus recevoir nos mails d'actualité</a></p>
+</div></body></html>"""
+
+async def _send_halloween(users):
+    sent, failed = 0, 0
+    for u in users:
+        try:
+            resend.Emails.send({
+                "from": "New School <noreply@ab-digital1.com>",
+                "reply_to": "newschoolaide@gmail.com",
+                "to": u["email"],
+                "subject": "🎃 5 soirées Halloween à Lyon ce samedi",
+                "html": halloween_html(u.get("first_name") or "", u["_id"]),
+                "headers": {"List-Unsubscribe": f"<{_unsub_link(u['_id'])}>"},
+            })
+            await db.users.update_one({"_id": u["_id"]}, {"$set": {"campaign_halloween_2026": datetime.utcnow()}})
+            sent += 1
+        except Exception as e:
+            failed += 1
+            logging.error(f"Campagne Halloween : échec pour {u.get('_id')} : {e}")
+        await asyncio.sleep(0.6)   # limite d'envoi Resend
+    logging.info(f"Campagne Halloween terminée : {sent} envoyés, {failed} échecs")
+
+@app.post("/api/admin/campagne/halloween")
+async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool = False):
+    """Sans « envoyer » : compte seulement. Avec « test » : un seul mail à cette adresse. Avec « envoyer=true » : tous les inscrits."""
+    if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
+        raise HTTPException(status_code=403, detail="Clé invalide")
+    if test:
+        resend.Emails.send({"from": "New School <noreply@ab-digital1.com>", "reply_to": "newschoolaide@gmail.com", "to": test,
+                            "subject": "[TEST] 🎃 5 soirées Halloween à Lyon ce samedi", "html": halloween_html("Ambroise", "test")})
+        return {"test": test, "envoye": True}
+    query = {"email": {"$exists": True, "$nin": [None, ""]}, "marketing_opt_out": {"$ne": True}, "campaign_halloween_2026": {"$exists": False}}
+    users = await db.users.find(query, {"email": 1, "first_name": 1}).to_list(5000)
+    apple = [u for u in users if u["email"].endswith("@privaterelay.appleid.com") or u["email"].endswith("@private.appleid.com")]
+    cibles = [u for u in users if u not in apple]
+    if not envoyer:
+        return {"destinataires": len(cibles), "adresses_apple_masquees_ignorees": len(apple)}
+    asyncio.create_task(_send_halloween(cibles))
+    return {"envoi_lance": len(cibles), "duree_estimee_secondes": int(len(cibles) * 0.6)}
+
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/telecharger", response_class=HTMLResponse)
 async def download_link(request: Request):
