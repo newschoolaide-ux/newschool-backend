@@ -112,6 +112,8 @@ async def start_photo_compaction():
     asyncio.create_task(compact_existing_photos())
 
 ADMIN_EMAIL = "newschool@ab-digital1.com"
+# Boîte qui reçoit les alertes « Nouvelle inscription » (l'ancienne adresse ab-digital1 n'existe plus)
+NOTIF_EMAIL = os.getenv("NOTIF_EMAIL", "newschoolaide@gmail.com")
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -348,7 +350,7 @@ async def send_welcome_email(to_email: str, first_name: str):
                             
                             <p style="color: #888888; font-size: 14px; margin-top: 40px; border-top: 1px solid #333; padding-top: 20px;">
                                 💜 L'équipe New School<br>
-                                📧 newschool@ab-digital1.com
+                                📧 newschoolaide@gmail.com
                             </p>
                         </div>
                     </body>
@@ -383,7 +385,7 @@ async def send_admin_notification(user_email: str, first_name: str):
                 },
                 json={
                     "from": "New School <noreply@ab-digital1.com>",
-                    "to": ["newschool@ab-digital1.com"],
+                    "to": [NOTIF_EMAIL],
                     "subject": f"🆕 Nouvelle inscription : {first_name}",
                     "html": f"""
                     <html>
