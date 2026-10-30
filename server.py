@@ -608,6 +608,35 @@ async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool
     asyncio.create_task(_send_halloween(cibles))
     return {"envoi_lance": len(cibles), "duree_estimee_secondes": int(len(cibles) * 0.6)}
 
+@app.post("/api/admin/campagne/notif-halloween")
+async def campaign_push_halloween(key: str, test: Optional[str] = None, envoyer: bool = False):
+    """Notification Halloween. Sans « envoyer » : compte. Avec « test=e-mail du compte » : un seul téléphone. « envoyer=true » : tout le monde."""
+    if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
+        raise HTTPException(status_code=403, detail="Clé invalide")
+    # la School Halloween ouverte (celle de La Commune), pour l'ouvrir au toucher
+    school = await db.events.find_one({"name": {"$regex": "halloween", "$options": "i"}, "end_time": {"$gt": datetime.utcnow()}}, {"_id": 1, "name": 1}, sort=[("created_at", -1)])
+    data = {"type": "join", "event_id": school["_id"]} if school else None
+    title = "🎃 Halloween, c'est demain !"
+    body = "Envie de rencontrer du monde ? Des Schools sont ouvertes près de toi, viens voir 👀"
+    base = {"push_token": {"$exists": True, "$nin": [None, ""]}}
+    if test:
+        u = await db.users.find_one({**base, "email": test})
+        if not u:
+            return {"test": test, "envoye": False, "raison": "pas de compte avec ce mail, ou notifications désactivées"}
+        await send_push_notification(u["push_token"], title, body, data)
+        return {"test": test, "envoye": True, "school": school["name"] if school else None}
+    users = await db.users.find({**base, "notif_halloween_2026": {"$exists": False}}, {"push_token": 1}).to_list(5000)
+    if not envoyer:
+        return {"telephones": len(users), "school": school["name"] if school else None}
+    async def go():
+        for u in users:
+            await send_push_notification(u["push_token"], title, body, data)
+            await db.users.update_one({"_id": u["_id"]}, {"$set": {"notif_halloween_2026": datetime.utcnow()}})
+            await asyncio.sleep(0.1)
+        logging.info(f"Notification Halloween envoyée à {len(users)} téléphones")
+    asyncio.create_task(go())
+    return {"envoi_lance": len(users), "school": school["name"] if school else None}
+
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/telecharger", response_class=HTMLResponse)
 async def download_link(request: Request):
