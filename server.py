@@ -539,25 +539,25 @@ HALLOWEEN_EVENTS = [
 
 def halloween_html(first_name: str, uid: str) -> str:
     esc = html_lib.escape
-    rows = "".join(
-        f'<tr><td style="padding:14px 0;border-bottom:1px solid #2A2535"><div style="font-weight:700;font-size:17px;color:#F5F3FA">{esc(n)}</div>'
-        f'<div style="color:#D6D2E0;font-size:14px;margin-top:3px">{esc(w)}</div>'
-        f'<div style="color:#A39DB3;font-size:13px;margin-top:3px">📍 {esc(a)} · 🕘 {esc(h)}{" · " + esc(p) if p else ""}</div></td></tr>'
-        for n, w, a, h, p in HALLOWEEN_EVENTS)
     hello = f"Salut {esc(first_name)} 👋" if first_name else "Salut 👋"
     return f"""<!doctype html><html><body style="margin:0;background:#0C0A12;font-family:-apple-system,Segoe UI,Arial,sans-serif">
 <div style="max-width:560px;margin:0 auto;padding:28px 22px;color:#F5F3FA">
 <div style="font-size:13px;letter-spacing:1px;color:#FDBA74;font-weight:700">NEW SCHOOL · HALLOWEEN</div>
-<h1 style="font-size:28px;line-height:1.15;margin:12px 0 6px">🎃 Pas de plan pour Halloween ?</h1>
-<p style="color:#D6D2E0;font-size:16px;line-height:1.5;margin:0 0 6px">{hello}</p>
-<p style="color:#D6D2E0;font-size:16px;line-height:1.5;margin:0 0 18px">Voici 5 soirées à Lyon ce <b>samedi 31 octobre</b>, dont une gratuite :</p>
-<table style="width:100%;border-collapse:collapse">{rows}</table>
-<div style="background:#16131F;border:1px solid #D946EF;border-radius:18px;padding:18px;margin:24px 0">
-<div style="font-weight:700;font-size:17px">Personne pour y aller ?</div>
-<div style="color:#D6D2E0;font-size:15px;line-height:1.5;margin-top:6px">Crée une School « On va à La Commune samedi, qui vient ? » : les gens autour de toi la voient sur la carte et peuvent te rejoindre. Il y en a déjà une pour La Commune samedi 21h 😉</div>
+<h1 style="font-size:28px;line-height:1.15;margin:12px 0 14px">🎃 Halloween, c'est demain.<br>Tu as un plan ?</h1>
+<p style="color:#D6D2E0;font-size:16px;line-height:1.55;margin:0 0 12px">{hello}</p>
+<p style="color:#D6D2E0;font-size:16px;line-height:1.55;margin:0 0 20px">Pas envie de passer la soirée seul, ou personne de dispo pour sortir ? Sur New School, des gens autour de toi cherchent exactement la même chose.</p>
+<div style="background:#16131F;border:1px solid #FB923C;border-radius:18px;padding:18px;margin:0 0 14px">
+<div style="font-size:13px;color:#FDBA74;font-weight:700">DÉJÀ SUR L'APP</div>
+<div style="font-weight:700;font-size:18px;margin-top:6px">🎃 Halloween à La Commune</div>
+<div style="color:#A39DB3;font-size:14px;margin-top:4px">Samedi 31 · 21h · Lyon 7e · entrée gratuite</div>
+<div style="color:#D6D2E0;font-size:15px;line-height:1.5;margin-top:8px">Rejoins-la en un clic, on y va à plusieurs.</div>
+</div>
+<div style="background:#16131F;border:1px solid #D946EF;border-radius:18px;padding:18px;margin:0 0 24px">
+<div style="font-weight:700;font-size:17px">Ou crée ta propre School</div>
+<div style="color:#D6D2E0;font-size:15px;line-height:1.5;margin-top:6px">Une soirée, un bar, une sortie déguisée… Propose-la en 30 secondes : les gens autour de toi la voient sur la carte et peuvent te rejoindre. C'est le moyen le plus simple de rencontrer du monde.</div>
 </div>
 <div style="text-align:center;margin:26px 0"><a href="{PUBLIC_URL}/app" style="display:inline-block;background:#D946EF;color:#1A0820;font-weight:800;font-size:16px;text-decoration:none;padding:15px 28px;border-radius:999px">Ouvrir New School</a></div>
-<p style="color:#8E889E;font-size:13px;line-height:1.5">Nouveau dans l'app : New School est 100 % gratuite, et tu peux choisir ton campus pour voir les sorties des étudiants de ton école.</p>
+<p style="color:#8E889E;font-size:13px;line-height:1.5">Rappel : New School est 100 % gratuite, et tu peux choisir ton campus pour voir les sorties des étudiants de ton école.</p>
 <p style="color:#8E889E;font-size:12px;line-height:1.5;margin-top:26px;border-top:1px solid #2A2535;padding-top:14px">Tu reçois ce mail car tu as un compte New School. Une question : réponds simplement à ce mail.<br>
 <a href="{_unsub_link(uid)}" style="color:#8E889E">Ne plus recevoir nos mails d'actualité</a></p>
 </div></body></html>"""
@@ -570,7 +570,7 @@ async def _send_halloween(users):
                 "from": "New School <noreply@ab-digital1.com>",
                 "reply_to": "newschoolaide@gmail.com",
                 "to": u["email"],
-                "subject": "🎃 5 soirées Halloween à Lyon ce samedi",
+                "subject": "🎃 Halloween demain : tu as un plan ?",
                 "html": halloween_html(u.get("first_name") or "", u["_id"]),
                 "headers": {"List-Unsubscribe": f"<{_unsub_link(u['_id'])}>"},
             })
@@ -589,7 +589,7 @@ async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool
         raise HTTPException(status_code=403, detail="Clé invalide")
     if test:
         resend.Emails.send({"from": "New School <noreply@ab-digital1.com>", "reply_to": "newschoolaide@gmail.com", "to": test,
-                            "subject": "[TEST] 🎃 5 soirées Halloween à Lyon ce samedi", "html": halloween_html("Ambroise", "test")})
+                            "subject": "[TEST] 🎃 Halloween demain : tu as un plan ?", "html": halloween_html("Ambroise", "test")})
         return {"test": test, "envoye": True}
     query = {"email": {"$exists": True, "$nin": [None, ""]}, "marketing_opt_out": {"$ne": True}, "campaign_halloween_2026": {"$exists": False}}
     users = await db.users.find(query, {"email": 1, "first_name": 1}).to_list(5000)
