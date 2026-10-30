@@ -583,7 +583,7 @@ async def _send_halloween(users):
     logging.info(f"Campagne Halloween terminée : {sent} envoyés, {failed} échecs")
 
 @app.post("/api/admin/campagne/halloween")
-async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool = False):
+async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool = False, apple: bool = False):
     """Sans « envoyer » : compte seulement. Avec « test » : un seul mail à cette adresse. Avec « envoyer=true » : tous les inscrits."""
     if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
         raise HTTPException(status_code=403, detail="Clé invalide")
@@ -594,9 +594,10 @@ async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool
     query = {"email": {"$exists": True, "$nin": [None, ""]}, "marketing_opt_out": {"$ne": True}, "campaign_halloween_2026": {"$exists": False}}
     users = await db.users.find(query, {"email": 1, "first_name": 1}).to_list(5000)
     apple = [u for u in users if u["email"].endswith("@privaterelay.appleid.com") or u["email"].endswith("@private.appleid.com")]
-    cibles = [u for u in users if u not in apple]
+    # apple=true : on écrit aussi aux adresses Apple masquées (domaine déclaré chez Apple)
+    cibles = users if apple else [u for u in users if u not in apple]
     if not envoyer:
-        return {"destinataires": len(cibles), "adresses_apple_masquees_ignorees": len(apple)}
+        return {"destinataires": len(cibles), "adresses_apple_masquees_ignorees": 0 if apple else len(apple)}
     asyncio.create_task(_send_halloween(cibles))
     return {"envoi_lance": len(cibles), "duree_estimee_secondes": int(len(cibles) * 0.6)}
 
