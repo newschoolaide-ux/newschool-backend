@@ -313,7 +313,13 @@ async def send_push_notification(push_token: str, title: str, body: str, data: d
 
 def generate_event_id():
     return f"event_{secrets.token_hex(6)}"
+def can_email(email: Optional[str]) -> bool:
+    """Faux : adresses inventées par le serveur quand Apple ne donne pas l'e-mail (apple_xxx@private.appleid.com)."""
+    return bool(email) and not email.lower().endswith("@private.appleid.com")
+
 async def send_welcome_email(to_email: str, first_name: str):
+    if not can_email(to_email):
+        return
     """Send welcome email via Resend API"""
     resend_api_key = os.getenv("RESEND_API_KEY")
     
@@ -593,11 +599,12 @@ async def campaign_halloween(key: str, test: Optional[str] = None, envoyer: bool
         return {"test": test, "envoye": True}
     query = {"email": {"$exists": True, "$nin": [None, ""]}, "marketing_opt_out": {"$ne": True}, "campaign_halloween_2026": {"$exists": False}}
     users = await db.users.find(query, {"email": 1, "first_name": 1}).to_list(5000)
-    apple = [u for u in users if u["email"].endswith("@privaterelay.appleid.com") or u["email"].endswith("@private.appleid.com")]
-    # apple=true : on écrit aussi aux adresses Apple masquées (domaine déclaré chez Apple)
-    cibles = users if apple else [u for u in users if u not in apple]
+    users = [u for u in users if can_email(u["email"])]   # jamais les adresses inventées
+    relais = [u for u in users if u["email"].lower().endswith("@privaterelay.appleid.com")]
+    # apple=true : on écrit aussi aux vrais relais Apple (domaine déclaré chez Apple)
+    cibles = users if apple else [u for u in users if u not in relais]
     if not envoyer:
-        return {"destinataires": len(cibles), "adresses_apple_masquees_ignorees": 0 if apple else len(apple)}
+        return {"destinataires": len(cibles), "relais_apple_ignores": 0 if apple else len(relais)}
     asyncio.create_task(_send_halloween(cibles))
     return {"envoi_lance": len(cibles), "duree_estimee_secondes": int(len(cibles) * 0.6)}
 
