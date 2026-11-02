@@ -637,11 +637,31 @@ async def campaign_push_halloween(key: str, test: Optional[str] = None, envoyer:
     asyncio.create_task(go())
     return {"envoi_lance": len(users), "school": school["name"] if school else None}
 
+@app.get("/api/admin/liens")
+async def link_stats(key: str):
+    """Clics sur le lien de téléchargement, par source (qr, bio…) et par téléphone."""
+    if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
+        raise HTTPException(status_code=403, detail="Clé invalide")
+    rows = await db.link_stats.find({}).to_list(5000)
+    total = {}
+    for r in rows:
+        t = total.setdefault(r["src"], {"iphone": 0, "android": 0, "ordi": 0, "total": 0})
+        t[r["plat"]] += r["n"]; t["total"] += r["n"]
+    return {"par_source": total, "par_jour": sorted([{"jour": r["day"], "source": r["src"], "tel": r["plat"], "clics": r["n"]} for r in rows], key=lambda x: x["jour"], reverse=True)[:60]}
+
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/telecharger", response_class=HTMLResponse)
 async def download_link(request: Request):
     """Lien unique pour la bio TikTok/Instagram : iPhone -> App Store, Android -> Google Play, ordinateur -> page avec les deux."""
     ua = (request.headers.get("user-agent") or "").lower()
+    # compteur : d'où viennent les clics (?src=qr, bio, tiktok…) et sur quel téléphone
+    src = re.sub(r"[^a-z0-9_-]", "", (request.query_params.get("src") or "bio").lower())[:30] or "bio"
+    plat = "android" if "android" in ua else "iphone" if any(k in ua for k in ("iphone", "ipad", "ipod")) else "ordi"
+    try:
+        await db.link_stats.update_one({"_id": f"{src}|{plat}|{datetime.utcnow():%Y-%m-%d}"},
+                                       {"$inc": {"n": 1}, "$set": {"src": src, "plat": plat, "day": f"{datetime.utcnow():%Y-%m-%d}"}}, upsert=True)
+    except Exception:
+        pass
     if "android" in ua:
         return RedirectResponse(PLAY_STORE_URL, status_code=302)
     if any(k in ua for k in ("iphone", "ipad", "ipod")):
