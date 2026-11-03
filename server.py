@@ -942,16 +942,65 @@ async def reset_password(data: dict):
     return {"message": "Password reset successfully"}
 
 
+APPLE_ISSUER = "https://appleid.apple.com"
+APPLE_AUDIENCES = [a.strip() for a in os.getenv("APPLE_BUNDLE_IDS", "com.newschoolaide.app").split(",") if a.strip()]
+_apple_keys = {"keys": [], "at": 0.0}
+
+async def _apple_jwks(force: bool = False):
+    import time
+    if force or not _apple_keys["keys"] or time.time() - _apple_keys["at"] > 6 * 3600:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{APPLE_ISSUER}/auth/keys")
+            r.raise_for_status()
+            _apple_keys["keys"] = r.json().get("keys", [])
+            _apple_keys["at"] = time.time()
+    return _apple_keys["keys"]
+
+async def verify_apple_token(identity_token: str) -> dict:
+    """Vérifie la signature du jeton Apple et renvoie ses infos (sub, email…). Lève 401 si invalide."""
+    try:
+        kid = jwt.get_unverified_header(identity_token).get("kid")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid Apple token")
+    keys = await _apple_jwks()
+    key = next((k for k in keys if k.get("kid") == kid), None)
+    if key is None:  # Apple a peut-être changé de clé
+        keys = await _apple_jwks(force=True)
+        key = next((k for k in keys if k.get("kid") == kid), None)
+    if key is None:
+        raise HTTPException(status_code=401, detail="Invalid Apple token")
+    last = None
+    for aud in APPLE_AUDIENCES:
+        try:
+            return jwt.decode(identity_token, key, algorithms=["RS256"], audience=aud, issuer=APPLE_ISSUER)
+        except JWTError as e:
+            last = e
+    logging.warning(f"Apple token refusé : {last}")
+    raise HTTPException(status_code=401, detail="Invalid Apple token")
+
+
 @app.post("/api/auth/apple")
 async def apple_auth(data: AppleAuthRequest):
     """Authenticate with Apple Sign In"""
+    # On ne fait confiance qu'au jeton signé par Apple (avant : n'importe qui pouvait envoyer un identifiant ou un e-mail)
+    claims = await verify_apple_token(data.identity_token)
+    data.user_identifier = claims["sub"]
+    token_email = (claims.get("email") or "").strip().lower() or None
+    email_ok = str(claims.get("email_verified", "true")).lower() == "true" or str(claims.get("is_private_email", "")).lower() == "true"
+    data.email = token_email if (token_email and email_ok) else None
+
     # Check if user exists by Apple user identifier
     existing_user = await db.users.find_one({"apple_user_id": data.user_identifier})
-    
+
     if existing_user:
         # User exists, log them in
         if existing_user.get("is_banned"):
             raise HTTPException(status_code=403, detail="Account banned")
+        # Adresse inventée à l'inscription : on la remplace par la vraie (ou le relais Apple) donnée par le jeton
+        if data.email and not can_email(existing_user.get("email")) \
+                and not await db.users.find_one({"email": data.email, "_id": {"$ne": existing_user["_id"]}}):
+            await db.users.update_one({"_id": existing_user["_id"]}, {"$set": {"email": data.email, "email_recovered_at": datetime.utcnow()}})
+            existing_user["email"] = data.email
         token = create_access_token({"sub": existing_user["_id"]})
         return {
             "access_token": token,
