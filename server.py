@@ -1098,7 +1098,10 @@ async def apple_auth(data: AppleAuthRequest):
     
     await db.users.insert_one(user_doc)
     token = create_access_token({"sub": user_id})
-    
+    # Comme pour les inscriptions par e-mail : alerte à Ambroise + mail de bienvenue (si l'adresse est utilisable)
+    await send_admin_notification(email if can_email(email) else "connexion Apple (adresse masquée)", f"{first_name} (Apple)")
+    await send_welcome_email(email, first_name)
+
     return {
         "access_token": token,
         "token": token,
