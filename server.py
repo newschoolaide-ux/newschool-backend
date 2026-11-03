@@ -637,6 +637,36 @@ async def campaign_push_halloween(key: str, test: Optional[str] = None, envoyer:
     asyncio.create_task(go())
     return {"envoi_lance": len(users), "school": school["name"] if school else None}
 
+def welcome_push_text(first_name=None):
+    prenom = (first_name or "").strip()
+    salut = f"Bienvenue {prenom} 👋" if prenom and prenom != "Utilisateur" else "Bienvenue sur New School 👋"
+    return salut, "Moi c'est Ambroise, le fondateur. Rejoins une School près de toi ou lance la tienne : c'est comme ça qu'on rencontre du monde 🙌"
+
+@app.post("/api/admin/campagne/bienvenue-push")
+async def campaign_welcome_push(key: str, depuis: str = "2026-10-28", test: Optional[str] = None, envoyer: bool = False):
+    """Notif de bienvenue aux inscrits récents sans e-mail utilisable (comptes Apple). Sans « envoyer » : liste."""
+    if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
+        raise HTTPException(status_code=403, detail="Clé invalide")
+    base = {"push_token": {"$exists": True, "$nin": [None, ""]}}
+    if test:
+        u = await db.users.find_one({**base, "email": test})
+        if not u:
+            return {"test": test, "envoye": False, "raison": "pas de compte avec ce mail, ou notifications désactivées"}
+        await send_push_notification(u["push_token"], *welcome_push_text(u.get("first_name")))
+        return {"test": test, "envoye": True}
+    d = datetime.fromisoformat(depuis)
+    recents = await db.users.find({"created_at": {"$gte": d}}, {"email": 1, "first_name": 1, "push_token": 1, "welcome_push_at": 1, "created_at": 1}).to_list(1000)
+    cibles = [u for u in recents if not can_email(u.get("email")) and u.get("push_token") and not u.get("welcome_push_at")]
+    if not envoyer:
+        return {"inscrits_depuis": len(recents),
+                "sans_email_avec_notifs": [{"prenom": u.get("first_name"), "inscrit": iso(u.get("created_at"))} for u in cibles],
+                "sans_email_sans_notifs": sum(1 for u in recents if not can_email(u.get("email")) and not u.get("push_token"))}
+    for u in cibles:
+        await send_push_notification(u["push_token"], *welcome_push_text(u.get("first_name")))
+        await db.users.update_one({"_id": u["_id"]}, {"$set": {"welcome_push_at": datetime.utcnow()}})
+        await asyncio.sleep(0.1)
+    return {"envoye": len(cibles)}
+
 @app.get("/api/admin/liens")
 async def link_stats(key: str):
     """Clics sur le lien de téléchargement, par source (qr, bio…) et par téléphone."""
@@ -1135,7 +1165,17 @@ async def save_push_token(data: PushTokenRequest, current_user: dict = Depends(g
         {"$set": {"push_token": data.push_token}}
     )
     print(f"DEBUG: matched_count = {result.matched_count}, modified_count = {result.modified_count}")
-    
+
+    # Nouvel inscrit sans e-mail utilisable (Apple) : bienvenue par notification, 10 min après
+    created = current_user.get("created_at")
+    if (not current_user.get("welcome_push_at") and not can_email(current_user.get("email"))
+            and isinstance(created, datetime) and datetime.utcnow() - created.replace(tzinfo=None) < timedelta(days=2)):
+        await db.users.update_one({"_id": current_user["_id"]}, {"$set": {"welcome_push_at": datetime.utcnow()}})
+        async def later(tok=data.push_token, name=current_user.get("first_name")):
+            await asyncio.sleep(600)
+            await send_push_notification(tok, *welcome_push_text(name))
+        asyncio.create_task(later())
+
     return {"message": "Push token saved"}
 
 @app.delete("/api/users/push-token")
