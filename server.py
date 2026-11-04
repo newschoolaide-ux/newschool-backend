@@ -321,6 +321,8 @@ async def send_welcome_email(to_email: str, first_name: str):
     if not can_email(to_email):
         return
     """Send welcome email via Resend API"""
+    # Apple ne donne pas toujours le prénom : pas de « Bienvenue Utilisateur »
+    first_name = "" if (first_name or "").strip() in ("", "Utilisateur") else f" {first_name.strip()}"
     resend_api_key = os.getenv("RESEND_API_KEY")
     
     if not resend_api_key:
@@ -343,7 +345,7 @@ async def send_welcome_email(to_email: str, first_name: str):
                     <html>
                     <body style="font-family: Arial, sans-serif; background-color: #0A0A0A; color: #FFFFFF; padding: 40px;">
                         <div style="max-width: 600px; margin: 0 auto; background-color: #1A1A1A; border-radius: 16px; padding: 40px;">
-                            <h1 style="color: #D946EF;">🎉 Bienvenue {first_name} !</h1>
+                            <h1 style="color: #D946EF;">🎉 Bienvenue{first_name} !</h1>
                             <p style="color: #CCCCCC; font-size: 16px;">Nous sommes ravis de t'accueillir dans la communauté <strong style="color: #D946EF;">New School</strong> !</p>
                             
                             <h2 style="color: #FFFFFF;">✨ Ce que tu peux faire :</h2>
