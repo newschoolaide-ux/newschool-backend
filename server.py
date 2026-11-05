@@ -110,6 +110,47 @@ async def compact_existing_photos():
 @app.on_event("startup")
 async def start_photo_compaction():
     asyncio.create_task(compact_existing_photos())
+    asyncio.create_task(reminder_loop())
+
+
+# ---------- Rappel 1 h avant une School programmée ----------
+async def send_due_reminders(now: Optional[datetime] = None):
+    """Notifie les participants des Schools qui commencent dans ~1 h (une seule fois par School).
+    Les Schools créées moins de 75 min avant leur début (spontanées) sont ignorées."""
+    now = now or datetime.utcnow()
+    sent = 0
+    cursor = db.events.find({
+        "start_time": {"$gte": now + timedelta(minutes=45), "$lte": now + timedelta(minutes=65)},
+        "reminder_1h": {"$exists": False},
+    })
+    async for ev in cursor:
+        if ev.get("created_at") and ev["start_time"] - ev["created_at"] < timedelta(minutes=75):
+            continue
+        # verrou : un seul envoi même si deux passages se chevauchent
+        res = await db.events.update_one({"_id": ev["_id"], "reminder_1h": {"$exists": False}}, {"$set": {"reminder_1h": now}})
+        if res.modified_count != 1:
+            continue
+        heure = ev["start_time"].replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Paris")).strftime("%Hh%M")
+        lieu = (ev.get("address") or "").split(",")[0].strip()
+        body = f"Rendez-vous à {heure}{' · ' + lieu if lieu else ''}. Un empêchement ? Préviens le groupe dans le chat 🙏"
+        for uid in ev.get("participants", []):
+            u = await db.users.find_one({"_id": uid}, {"push_token": 1})
+            if u and u.get("push_token"):
+                await send_push_notification(u["push_token"], f"⏰ Dans 1 h : {ev.get('name', 'ta School')}", body,
+                                             {"type": "join", "event_id": ev["_id"]})
+                sent += 1
+    return sent
+
+async def reminder_loop():
+    await asyncio.sleep(30)
+    while True:
+        try:
+            n = await send_due_reminders()
+            if n:
+                logger.info(f"Rappels 1 h envoyés : {n}")
+        except Exception as e:
+            logger.error(f"Rappels 1 h : {e}")
+        await asyncio.sleep(300)
 
 ADMIN_EMAIL = "newschool@ab-digital1.com"
 # Boîte qui reçoit les alertes « Nouvelle inscription » (l'ancienne adresse ab-digital1 n'existe plus)
