@@ -1429,6 +1429,67 @@ async def get_events(theme: Optional[str] = None, search: Optional[str] = None, 
         })
     return result
 
+# ---------- Recherche de lieux (carte et création de School) ----------
+PHOTON_URL = os.getenv("PHOTON_URL", "https://photon.komoot.io/api/")
+_places_cache: dict = {}
+
+def _place_from_feature(f: dict):
+    p = f.get("properties") or {}
+    coords = (f.get("geometry") or {}).get("coordinates") or []
+    if len(coords) < 2:
+        return None
+    name = p.get("name") or " ".join(x for x in [p.get("housenumber"), p.get("street")] if x)
+    if not name:
+        name = p.get("city") or p.get("state") or ""
+    if not name:
+        return None
+    street = " ".join(x for x in [p.get("housenumber"), p.get("street")] if x)
+    city = p.get("city") or p.get("town") or p.get("village") or p.get("county") or ""
+    sub = ", ".join(x for x in [street if street != name else "", p.get("district") if p.get("district") != city else "", city if city != name else ""] if x)
+    kind = p.get("osm_value") or p.get("type") or ""
+    is_area = p.get("type") in ("city", "district", "county", "state", "country") or kind in ("city", "town", "village", "suburb")
+    return {"name": name, "subtitle": sub or (p.get("country") or ""), "latitude": coords[1], "longitude": coords[0],
+            "kind": kind, "zoom": "area" if is_area else "place"}
+
+@app.get("/api/places/search")
+async def search_places(q: str, lat: Optional[float] = None, lng: Optional[float] = None, limit: int = 6,
+                        current_user: dict = Depends(get_current_user)):
+    """Lieux (écoles, bars, adresses, villes) autour de la position de l'utilisateur, via Photon (OpenStreetMap)."""
+    q = (q or "").strip()[:80]
+    if len(q) < 2:
+        return []
+    limit = max(1, min(limit, 8))
+    key = (q.lower(), round(lat or 0, 1), round(lng or 0, 1), limit)
+    hit = _places_cache.get(key)
+    if hit and hit[0] > datetime.utcnow():
+        return hit[1]
+    params = {"q": q, "limit": limit + 4, "lang": "fr"}
+    if lat is not None and lng is not None:
+        params.update({"lat": lat, "lon": lng, "location_bias_scale": 0.3, "zoom": 12})
+    try:
+        async with httpx.AsyncClient(timeout=6, headers={"User-Agent": "NewSchool/1.11 (newschoolaide@gmail.com)"}) as c:
+            r = await c.get(PHOTON_URL, params=params)
+            r.raise_for_status()
+            feats = r.json().get("features", [])
+    except Exception as e:
+        logger.warning(f"Recherche de lieux indisponible : {e}")
+        raise HTTPException(status_code=503, detail="Recherche indisponible")
+    out, seen = [], set()
+    for f in feats:
+        pl = _place_from_feature(f)
+        if not pl:
+            continue
+        k = (pl["name"].lower(), round(pl["latitude"], 3), round(pl["longitude"], 3))
+        if k in seen:
+            continue
+        seen.add(k); out.append(pl)
+        if len(out) >= limit:
+            break
+    if len(_places_cache) > 500:
+        _places_cache.clear()
+    _places_cache[key] = (datetime.utcnow() + timedelta(hours=12), out)
+    return out
+
 @app.get("/api/events/nearby")
 async def get_nearby_events(latitude: float, longitude: float, radius_km: float = 50, current_user: dict = Depends(get_current_user)):
     
