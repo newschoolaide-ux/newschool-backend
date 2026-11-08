@@ -1751,6 +1751,12 @@ async def get_user_joined_events(current_user: dict = Depends(get_current_user))
 @app.get("/api/events/{event_id}/messages")
 async def get_messages(event_id: str, current_user: dict = Depends(get_current_user)):
     messages = await db.messages.find({"event_id": event_id}).sort("timestamp", 1).to_list(100)
+    # Ouvrir le chat marque ses messages comme lus (pour les pastilles de l'écran Messages).
+    await db.chat_reads.update_one(
+        {"user_id": current_user["_id"], "event_id": event_id},
+        {"$set": {"read_at": datetime.utcnow()}},
+        upsert=True,
+    )
     result = []
     for m in messages:
         sender = await db.users.find_one({"_id": m["user_id"]})
@@ -1808,7 +1814,13 @@ async def send_message(event_id: str, message: MessageCreate, current_user: dict
 
 @app.get("/api/chats")
 async def get_chats(current_user: dict = Depends(get_current_user)):
-    events = await db.events.find({"participants": current_user["_id"]}).to_list(50)
+    """Conversations de l'utilisateur, de la plus récente à la plus ancienne (dernier message, sinon création de la School)."""
+    me = current_user["_id"]
+    now = datetime.now(timezone.utc)
+    events = await db.events.find({"participants": me}).sort("created_at", -1).to_list(100)
+    reads = {r["event_id"]: r.get("read_at") for r in await db.chat_reads.find({"user_id": me}).to_list(200)}
+    first_ids = list({pid for e in events for pid in e.get("participants", [])[:4]})
+    people = {u["_id"]: u for u in await db.users.find({"_id": {"$in": first_ids}}, {"first_name": 1, "photo": 1}).to_list(len(first_ids) or 1)}
     chats = []
     for event in events:
         last_message = await db.messages.find_one({"event_id": event["_id"]}, sort=[("timestamp", -1)])
@@ -1817,17 +1829,39 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
             last_message_data = {
                 "content": last_message["content"],
                 "sender_name": last_message.get("user_name", ""),
+                "sender_id": last_message.get("user_id"),
                 "created_at": iso(last_message["timestamp"])
             }
+        unread_query = {"event_id": event["_id"], "user_id": {"$ne": me}}
+        if reads.get(event["_id"]):
+            unread_query["timestamp"] = {"$gt": reads[event["_id"]]}
+        unread = await db.messages.count_documents(unread_query) if last_message else 0
+        start = _as_utc(event["start_time"]) if event.get("start_time") else None
+        end = _as_utc(event["end_time"]) if event.get("end_time") else None
+        status = "past" if end and end < now else ("upcoming" if start and start > now else "ongoing")
+        activity = _as_utc(last_message["timestamp"]) if last_message else _as_utc(event.get("created_at") or event.get("start_time") or now)
         chats.append({
             "event_id": event["_id"],
             "event_name": event["name"],
             "event_theme": event.get("theme", "general"),
             "event_photo": event.get("photo_base64"),
+            "event_address": event.get("address", ""),
+            "start_time": iso(start),
+            "end_time": iso(end),
+            "status": status,
+            "last_activity": iso(activity),
             "last_message": last_message_data,
             "participants_count": len(event.get("participants", [])),
-            "unread_count": 0
+            "participants_preview": [
+                {"id": pid, "first_name": people.get(pid, {}).get("first_name", ""), "photo": people.get(pid, {}).get("photo")}
+                for pid in event.get("participants", [])[:4]
+            ],
+            "unread_count": unread,
+            "_activity": activity
         })
+    chats.sort(key=lambda c: c["_activity"], reverse=True)
+    for c in chats:
+        c.pop("_activity")
     return chats
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
