@@ -1826,8 +1826,15 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
             "event_photo": event.get("photo_base64"),
             "last_message": last_message_data,
             "participants_count": len(event.get("participants", [])),
-            "unread_count": 0
+            "unread_count": 0,
+            "start_time": iso(event.get("start_time")),
+            "end_time": iso(event.get("end_time")),
+            "_sort": (last_message or {}).get("timestamp") or event.get("start_time") or event.get("created_at") or datetime.min,
         })
+    # Conversations les plus récentes en haut
+    chats.sort(key=lambda c: c["_sort"] if isinstance(c["_sort"], datetime) else datetime.min, reverse=True)
+    for c in chats:
+        c.pop("_sort", None)
     return chats
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
