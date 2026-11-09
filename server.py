@@ -1196,7 +1196,15 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
         "bio": user.get("bio", ""),
         "languages": user.get("languages", []),
         "campus": user.get("campus") or None,
-        "created_at": iso(user.get("created_at")) if user.get("created_at") else None
+        "created_at": iso(user.get("created_at")) if user.get("created_at") else None,
+        "is_me": user["_id"] == current_user["_id"],
+        "is_following": user["_id"] in (current_user.get("following") or []),
+        "follows_me": current_user["_id"] in (user.get("following") or []),
+        "followers_count": await db.users.count_documents({"following": user["_id"]}),
+        "schools_count": await db.events.count_documents({"participants": user["_id"]}),
+        "schools_together": await db.events.count_documents({"participants": {"$all": [user["_id"], current_user["_id"]]}}),
+        "upcoming": [event_brief(e) for e in await db.events.find(
+            {"participants": user["_id"], "end_time": {"$gt": datetime.utcnow()}}).sort("start_time", 1).to_list(5)],
     }
 class PushTokenRequest(BaseModel):
     push_token: str
@@ -1328,7 +1336,8 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
     }
     await db.events.insert_one(event_doc)
     
-    # 🔔 Notifier les utilisateurs proches (dans un rayon de 20km)
+    # 🔔 Ceux qui suivent le créateur, puis les gens autour (sans doublon)
+    already = await notify_followers(current_user, event_doc, joined=False)
     try:
         nearby_users = await db.users.find({
             "last_location": {
@@ -1338,7 +1347,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
                 }
             },
             "push_token": {"$exists": True, "$ne": None},
-            "_id": {"$ne": current_user["_id"]}  # Pas le créateur
+            "_id": {"$nin": [current_user["_id"], *already]}  # Pas le créateur ni ses abonnés déjà prévenus
         }).to_list(100)
         
         for user in nearby_users:
@@ -1346,7 +1355,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
                 user["push_token"],
                 "Nouvelle New School près de vous ! 📍",
                 f"\"{event.name}\" vient d'être créée",
-                {"type": "nearby", "event_id": event_id}
+                {"type": "join", "event_id": event_id}
             )
     except Exception as e:
         logger.error(f"Error notifying nearby users: {e}")
@@ -1645,8 +1654,10 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
             push_token=creator["push_token"],
             title="Nouveau participant ! 🎉",
             body=f"{current_user.get('first_name', 'Quelqu un')} a rejoint votre événement {event['name']}",
-            data={"event_id": event_id}
+            data={"type": "join", "event_id": event_id}
         )
+    # Ceux qui suivent cette personne : « Alban va à … »
+    await notify_followers(current_user, event, joined=True)
     
 @app.post("/api/events/{event_id}/leave")
 async def leave_event(event_id: str, current_user: dict = Depends(get_current_user)):
@@ -1752,7 +1763,7 @@ async def get_user_joined_events(current_user: dict = Depends(get_current_user))
 
 @app.get("/api/events/{event_id}/messages")
 async def get_messages(event_id: str, current_user: dict = Depends(get_current_user)):
-    messages = await db.messages.find({"event_id": event_id}).sort("timestamp", 1).to_list(100)
+    messages = (await db.messages.find({"event_id": event_id}).sort("timestamp", -1).to_list(200))[::-1]
     result = []
     for m in messages:
         sender = await db.users.find_one({"_id": m["user_id"]})
@@ -1793,7 +1804,7 @@ async def send_message(event_id: str, message: MessageCreate, current_user: dict
                     push_token=participant["push_token"],
                     title=f"Nouveau message dans {event['name']}",
                     body=f"{current_user.get('first_name', 'Quelqu un')}: {message.content[:50]}",
-                    data={"event_id": event_id}
+                    data={"type": "message", "event_id": event_id}
                 )
     
     return {
@@ -1838,6 +1849,137 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
     for c in chats:
         c.pop("_sort", None)
     return chats
+
+# ---------- v1.13 : recroiser les gens après une School ----------
+
+def event_brief(e):
+    when, _ = school_when(e)
+    return {
+        "event_id": e["_id"], "name": e.get("name", ""), "theme": e.get("theme"),
+        "address": e.get("address", ""), "start_time": iso(e.get("start_time")), "end_time": iso(e.get("end_time")),
+        "when": when, "participants_count": len(e.get("participants", [])),
+        "max_participants": e.get("max_participants", 50), "creator_id": e.get("creator_id"),
+    }
+
+async def notify_followers(actor: dict, event: dict, joined: bool) -> list:
+    """Prévient les abonnés de `actor` qu'il lance (ou rejoint) une School. Renvoie les ids prévenus."""
+    sent = []
+    try:
+        if not event.get("end_time") or _as_utc(event["end_time"]) < datetime.now(timezone.utc):
+            return sent
+        name = actor.get("first_name") or "Quelqu'un"
+        when, _ = school_when(event)
+        followers = await db.users.find({"following": actor["_id"], "push_token": {"$exists": True, "$ne": None},
+                                         "_id": {"$nin": event.get("participants", [])}}).to_list(300)
+        for f in followers:
+            title = f"{name} va à « {event['name']} »" if joined else f"{name} lance une School 🔥"
+            body = f"{when}. Viens avec lui·elle 👋" if joined else f"« {event['name']} » · {when}"
+            await send_push_notification(f["push_token"], title, body, {"type": "join", "event_id": event["_id"]})
+            sent.append(f["_id"])
+    except Exception as e:
+        logger.error(f"notify_followers: {e}")
+    return sent
+
+async def people_met(uid: str) -> dict:
+    """Les gens avec qui `uid` a partagé une School déjà commencée : {id: {count, last_name, last_date}}."""
+    now = datetime.utcnow()
+    met = {}
+    async for e in db.events.find({"participants": uid, "start_time": {"$lte": now}},
+                                  {"participants": 1, "name": 1, "start_time": 1}).sort("start_time", -1).limit(300):
+        for p in e.get("participants", []):
+            if p == uid:
+                continue
+            m = met.setdefault(p, {"count": 0, "last_name": e.get("name", ""), "last_date": e.get("start_time")})
+            m["count"] += 1
+    return met
+
+@app.get("/api/me/people")
+async def my_people(event_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """« Tes rencontres » : les gens croisés en School + ceux que tu suis. Avec event_id : qui est déjà dedans / invité."""
+    uid = current_user["_id"]
+    met = await people_met(uid)
+    following = set(current_user.get("following") or [])
+    ids = list(dict.fromkeys([*met.keys(), *following]))[:300]
+    event = await db.events.find_one({"_id": event_id}) if event_id else None
+    in_event = set(event.get("participants", [])) if event else set()
+    invited = set((event.get("invited") or {}).get(uid, [])) if event else set()
+    users = {u["_id"]: u async for u in db.users.find({"_id": {"$in": ids}, "is_banned": {"$ne": True}},
+                                                     {"first_name": 1, "photo": 1, "following": 1})}
+    out = []
+    for i in ids:
+        u = users.get(i)
+        if not u:
+            continue
+        m = met.get(i)
+        out.append({
+            "user_id": i, "first_name": u.get("first_name") or "", "photo": u.get("photo"),
+            "schools_together": m["count"] if m else 0,
+            "last_school": m["last_name"] if m else None,
+            "last_date": iso(m["last_date"]) if m else None,
+            "is_following": i in following,
+            "follows_me": uid in (u.get("following") or []),
+            "in_event": i in in_event, "invited": i in invited,
+        })
+    out.sort(key=lambda r: r["last_date"] or "", reverse=True)
+    return out
+
+@app.post("/api/users/{user_id}/follow")
+async def follow_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    if user_id == current_user["_id"]:
+        raise HTTPException(status_code=400, detail="Tu ne peux pas te suivre toi-même")
+    target = await db.users.find_one({"_id": user_id})
+    if not target or target.get("is_banned"):
+        raise HTTPException(status_code=404, detail="User not found")
+    res = await db.users.update_one({"_id": current_user["_id"]}, {"$addToSet": {"following": user_id}})
+    if res.modified_count and target.get("push_token"):
+        # une seule fois par personne, même si on se désabonne / réabonne
+        first = await db.users.update_one({"_id": user_id}, {"$addToSet": {"follow_notified": current_user["_id"]}})
+        if first.modified_count:
+            await send_push_notification(target["push_token"], f"{current_user.get('first_name') or 'Quelqu un'} te suit 👀",
+                                         "Tu seras dans ses notifs quand tu lances une School. Suis-le·la en retour ?",
+                                         {"type": "user", "user_id": current_user["_id"]})
+    return {"is_following": True}
+
+@app.delete("/api/users/{user_id}/follow")
+async def unfollow_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"following": user_id}})
+    return {"is_following": False}
+
+class InviteRequest(BaseModel):
+    user_ids: List[str]
+
+@app.post("/api/events/{event_id}/invite")
+async def invite_to_event(event_id: str, req: InviteRequest, current_user: dict = Depends(get_current_user)):
+    """Inviter des gens croisés en School (ou qu'on suit / qui nous suivent) à une School à venir."""
+    uid = current_user["_id"]
+    event = await db.events.find_one({"_id": event_id})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if uid not in event.get("participants", []):
+        raise HTTPException(status_code=403, detail="Rejoins la School pour inviter du monde")
+    if _as_utc(event.get("end_time")) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Cette School est terminée")
+    met = await people_met(uid)
+    following = set(current_user.get("following") or [])
+    already = set((event.get("invited") or {}).get(uid, [])) | set(event.get("participants", []))
+    wanted = [i for i in dict.fromkeys(req.user_ids) if i not in already][:40]
+    allowed = []
+    for i in wanted:
+        if i in met or i in following or await db.users.count_documents({"_id": i, "following": uid}, limit=1):
+            allowed.append(i)
+    if not allowed:
+        return {"sent": 0}
+    await db.events.update_one({"_id": event_id}, {"$addToSet": {f"invited.{uid}": {"$each": allowed}}})
+    name = current_user.get("first_name") or "Quelqu'un"
+    when, _ = school_when(event)
+    place = f" · {event['address']}" if event.get("address") else ""
+    sent = 0
+    async for u in db.users.find({"_id": {"$in": allowed}, "push_token": {"$exists": True, "$ne": None}}):
+        await send_push_notification(u["push_token"], f"{name} t'invite à « {event['name']} » 🙌",
+                                     f"{when}{place}. On se refait ça ?", {"type": "join", "event_id": event_id})
+        sent += 1
+    return {"sent": len(allowed), "notified": sent}
+
 @app.get("/api/subscriptions/tiers")
 async def get_tiers(current_user: dict = Depends(get_current_user)):
     return [
