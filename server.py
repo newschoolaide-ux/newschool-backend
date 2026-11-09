@@ -161,6 +161,7 @@ class UserCreate(BaseModel):
     password: str
     first_name: str
     last_name: Optional[str] = ""
+    phone: Optional[str] = None
     gender: Optional[str] = None
     birth_year: Optional[int] = None
 
@@ -854,6 +855,7 @@ async def register(user: UserCreate):
         "password_hash": get_password_hash(user.password),
         "first_name": user.first_name,
         "last_name": user.last_name,
+        "phone": (user.phone or "").strip() or None,
         "gender": user.gender,
         "birth_year": user.birth_year,
         "role": role,
