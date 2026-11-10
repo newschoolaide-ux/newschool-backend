@@ -711,6 +711,43 @@ async def campaign_welcome_push(key: str, depuis: str = "2026-10-28", test: Opti
         await asyncio.sleep(0.1)
     return {"envoye": len(cibles)}
 
+NO_NAME = {"", "utilisateur", "user", "none", "null"}
+
+def has_no_name(u: dict) -> bool:
+    return (u.get("first_name") or "").strip().lower() in NO_NAME
+
+PRENOM_PUSH = ("👋 Comment tu t'appelles ?",
+               "Ajoute ton prénom dans Profil → Modifier : pour l'instant les autres te voient comme « Utilisateur » 😅")
+
+@app.post("/api/admin/campagne/prenom-push")
+async def campaign_name_push(key: str, test: Optional[str] = None, envoyer: bool = False):
+    """Notif « Ajoute ton prénom » UNIQUEMENT aux comptes sans prénom (ou « Utilisateur »). Sans « envoyer » : liste."""
+    if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
+        raise HTTPException(status_code=403, detail="Clé invalide")
+    if test:
+        u = await db.users.find_one({"email": test, "push_token": {"$exists": True, "$nin": [None, ""]}})
+        if not u:
+            return {"test": test, "envoye": False, "raison": "pas de compte avec ce mail, ou notifications désactivées"}
+        await send_push_notification(u["push_token"], *PRENOM_PUSH, {"type": "profile"})
+        return {"test": test, "envoye": True}
+    users = await db.users.find({"is_banned": {"$ne": True}},
+                                {"first_name": 1, "push_token": 1, "prenom_push_at": 1, "created_at": 1}).to_list(5000)
+    sans_prenom = [u for u in users if has_no_name(u)]
+    cibles = [u for u in sans_prenom if u.get("push_token") and not u.get("prenom_push_at")]
+    if not envoyer:
+        return {"comptes_total": len(users),
+                "sans_prenom": len(sans_prenom),
+                "a_notifier": [{"prenom_actuel": u.get("first_name") or "(vide)", "inscrit": iso(u.get("created_at")) if u.get("created_at") else None} for u in cibles],
+                "sans_prenom_sans_notifs": sum(1 for u in sans_prenom if not u.get("push_token")),
+                "deja_notifies": sum(1 for u in sans_prenom if u.get("prenom_push_at"))}
+    n = 0
+    for u in cibles:
+        await send_push_notification(u["push_token"], *PRENOM_PUSH, {"type": "profile"})
+        await db.users.update_one({"_id": u["_id"]}, {"$set": {"prenom_push_at": datetime.utcnow()}})
+        n += 1
+        await asyncio.sleep(0.1)
+    return {"envoye": n}
+
 @app.get("/api/admin/liens")
 async def link_stats(key: str):
     """Clics sur le lien de téléchargement, par source (qr, bio…) et par téléphone."""
