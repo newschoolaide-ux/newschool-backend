@@ -1336,8 +1336,8 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
     """Update user profile"""
     update_data = {}
     
-    if data.first_name is not None:
-        update_data["first_name"] = data.first_name
+    if data.first_name is not None and data.first_name.strip():
+        update_data["first_name"] = data.first_name.strip()[:30]
     if data.bio is not None:
         update_data["bio"] = data.bio
     if data.phone is not None:
@@ -1347,7 +1347,9 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
         update_data["photo_v"] = PHOTO_VERSION
     if data.campus is not None:
         update_data["campus"] = data.campus.strip()[:60]
-    if data.languages is not None:
+    sent = getattr(data, "model_fields_set", None) or getattr(data, "__fields_set__", set())
+    # languages vaut [] par défaut : on ne l'écrit que si l'app l'a vraiment envoyé
+    if data.languages is not None and "languages" in sent:
         update_data["languages"] = normalize_languages(data.languages)
     if data.gender is not None:
         update_data["gender"] = data.gender
