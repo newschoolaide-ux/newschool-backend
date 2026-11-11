@@ -1725,13 +1725,19 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
     if existing_event["creator_id"] != current_user["_id"]:
         raise HTTPException(status_code=403, detail="Only the creator can edit this event")
     
-    address = event.location_name or event.address or ""
-    photo_data = await compress_photo_async(event.photo or event.photo_base64)
+    address = event.location_name or event.address or existing_event.get("address", "")
+    sent = getattr(event, "model_fields_set", None) or getattr(event, "__fields_set__", set())
+    new_photo = event.photo or event.photo_base64
+    # La photo renvoyée telle quelle par l'app n'est pas recompressée
+    photo_data = await compress_photo_async(new_photo) if new_photo and new_photo != existing_event.get("photo_base64") else None
+    location = existing_event.get("location")
+    if event.latitude is not None and event.longitude is not None:
+        location = {"type": "Point", "coordinates": [event.longitude, event.latitude]}
     
     update_data = {
         "name": event.name,
         "description": event.description,
-        "location": {"type": "Point", "coordinates": [event.longitude, event.latitude]},
+        "location": location,
         "address": address,
         "max_participants": event.max_participants or 50,
         "theme": event.theme,
@@ -1744,7 +1750,10 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
         update_data["photo_base64"] = photo_data
         update_data["photo_v"] = PHOTO_VERSION
     
-    if event.duration_days and event.duration_days > 0:
+    # Durée : seulement si l'app l'a envoyée (avant, le défaut duration_days=1 passait tout à 24 h)
+    if "duration_hours" in sent and event.duration_hours and event.duration_hours > 0:
+        update_data["end_time"] = existing_event["start_time"] + timedelta(hours=min(event.duration_hours, 24 * 30))
+    elif "duration_days" in sent and event.duration_days and event.duration_days > 0:
         update_data["end_time"] = existing_event["start_time"] + timedelta(days=event.duration_days)
     
     await db.events.update_one({"_id": event_id}, {"$set": update_data})
@@ -1761,7 +1770,9 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
                     {"type": "updated", "event_id": event_id}
                 )
     
-    return {"message": "Event updated successfully"}
+    # L'app remplace la School affichée par cette réponse : on renvoie la School complète
+    # (avant : {"message": ...} → écran de la School vide puis fermeture de l'app)
+    return await get_event(event_id, current_user)
 
 
 @app.delete("/api/events/{event_id}")
