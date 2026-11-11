@@ -88,6 +88,36 @@ def compress_photo(data, max_side=EVENT_PHOTO_SIDE, quality=72):
 async def compress_photo_async(data, max_side=EVENT_PHOTO_SIDE):
     return await asyncio.to_thread(compress_photo, data, max_side)
 
+
+import unicodedata
+LANG_CANON = {"francais": "Français", "english": "English", "anglais": "English", "espanol": "Español", "espagnol": "Español",
+              "deutsch": "Deutsch", "allemand": "Deutsch", "italiano": "Italiano", "italien": "Italiano",
+              "portugues": "Português", "portugais": "Português"}
+def _lang_key(x: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", (x or "").strip().lower()) if unicodedata.category(c) != "Mn")
+def normalize_languages(langs) -> list:
+    """« Francais » et « Français » ne font qu'une langue (deux écrans de l'app n'avaient pas la même liste)."""
+    out, seen = [], set()
+    for l in langs or []:
+        if not isinstance(l, str) or not l.strip():
+            continue
+        k = _lang_key(l)
+        if k in seen:
+            continue
+        seen.add(k); out.append(LANG_CANON.get(k, l.strip()))
+    return out
+
+async def clean_languages():
+    n = 0
+    try:
+        async for u in db.users.find({"languages.1": {"$exists": True}}, {"languages": 1}):
+            clean = normalize_languages(u.get("languages"))
+            if clean != u.get("languages"):
+                await db.users.update_one({"_id": u["_id"]}, {"$set": {"languages": clean}}); n += 1
+        if n: logger.info(f"Langues nettoyées sur {n} profils")
+    except Exception as e:
+        logger.error(f"clean_languages: {e}")
+
 async def compact_existing_photos():
     """Compresse une fois les photos déjà enregistrées (Schools et profils). Sans effet au redémarrage suivant."""
     saved = 0
@@ -111,6 +141,7 @@ async def compact_existing_photos():
 async def start_photo_compaction():
     asyncio.create_task(compact_existing_photos())
     asyncio.create_task(reminder_loop())
+    asyncio.create_task(clean_languages())
 
 
 # ---------- Rappel 1 h avant une School programmée ----------
@@ -1211,7 +1242,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "subscription_tier": current_user.get("subscription_tier", "free"),
         "gender": current_user.get("gender"),
         "birth_year": current_user.get("birth_year"),
-        "languages": current_user.get("languages", []),
+        "languages": normalize_languages(current_user.get("languages", [])),
         "bio": current_user.get("bio", ""),
         "photo": current_user.get("photo"),
         "campus": current_user.get("campus") or None,
@@ -1231,7 +1262,7 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
         "first_name": user.get("first_name", ""),
         "photo": user.get("photo"),
         "bio": user.get("bio", ""),
-        "languages": user.get("languages", []),
+        "languages": normalize_languages(user.get("languages", [])),
         "campus": user.get("campus") or None,
         "created_at": iso(user.get("created_at")) if user.get("created_at") else None,
         "is_me": user["_id"] == current_user["_id"],
@@ -1317,7 +1348,7 @@ async def update_profile(data: ProfileUpdate, current_user: dict = Depends(get_c
     if data.campus is not None:
         update_data["campus"] = data.campus.strip()[:60]
     if data.languages is not None:
-        update_data["languages"] = data.languages
+        update_data["languages"] = normalize_languages(data.languages)
     if data.gender is not None:
         update_data["gender"] = data.gender
     if data.birth_year is not None:
