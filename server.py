@@ -873,6 +873,57 @@ async def link_stats(key: str):
         t[r["plat"]] += r["n"]; t["total"] += r["n"]
     return {"par_source": total, "par_jour": sorted([{"jour": r["day"], "source": r["src"], "tel": r["plat"], "clics": r["n"]} for r in rows], key=lambda x: x["jour"], reverse=True)[:60]}
 
+SUPPORT_TEXT = {
+    "fr": {
+        "title": "New School · Aide et contact",
+        "h1": "Aide et contact",
+        "intro": "Une question, un bug, un comportement à signaler ? Écris-nous, on répond en général dans la journée.",
+        "mail": "Écrire à l'équipe",
+        "faq": [
+            ("Comment créer une School ?", "Appuie sur le bouton « + » en bas de l'écran, choisis un nom, un lieu et une heure, puis publie. Les gens autour de toi sont prévenus."),
+            ("Comment rejoindre une School ?", "Ouvre une School sur la carte ou dans Explorer, puis appuie sur « Rejoindre ». Le chat de groupe s'ouvre pour vous organiser."),
+            ("L'app est-elle payante ?", "Non, New School est 100 % gratuite, sans abonnement ni limite."),
+            ("Comment signaler quelqu'un ?", "Écris-nous à newschoolaide@gmail.com avec le prénom de la personne et la School concernée. On traite chaque signalement."),
+            ("Comment supprimer mon compte ?", "Dans l'app : Profil → Confidentialité → Supprimer mon compte. Toutes tes données sont effacées définitivement."),
+        ],
+        "foot": "New School · AB DIGITAL, Écully (France)",
+    },
+    "en": {
+        "title": "New School · Help & contact",
+        "h1": "Help & contact",
+        "intro": "A question, a bug, someone to report? Write to us, we usually reply within a day.",
+        "mail": "Email the team",
+        "faq": [
+            ("How do I create a School?", "Tap the \"+\" button at the bottom of the screen, pick a name, a place and a time, then publish. People nearby get notified."),
+            ("How do I join a School?", "Open a School on the map or in Explore, then tap \"Join\". A group chat opens so you can get organised."),
+            ("Is the app free?", "Yes, New School is 100% free, no subscription, no limits."),
+            ("How do I report someone?", "Email us at newschoolaide@gmail.com with the person's first name and the School. We review every report."),
+            ("How do I delete my account?", "In the app: Profile → Privacy → Delete my account. All your data is permanently deleted."),
+        ],
+        "foot": "New School · AB DIGITAL, Écully (France)",
+    },
+}
+
+@app.get("/support", response_class=HTMLResponse)
+@app.get("/aide", response_class=HTMLResponse)
+async def support_page(request: Request):
+    """Page d'assistance publique (URL d'assistance App Store / Google Play). ?lang=en pour l'anglais."""
+    q = (request.query_params.get("lang") or "").lower()[:2]
+    lang = q if q in ("fr", "en") else ("fr" if request.url.path == "/aide" else (header_lang(request) or "en"))
+    t = SUPPORT_TEXT[lang]
+    esc = lambda x: x.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    faq = "".join(f"<details><summary>{esc(qq)}</summary><p>{esc(a)}</p></details>" for qq, a in t["faq"])
+    other = '<a class="l" href="/support?lang=fr">Français</a>' if lang == "en" else '<a class="l" href="/support?lang=en">English</a>'
+    page = f"""<!doctype html><html lang="{lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{esc(t["title"])}</title><style>body{{margin:0;background:#0C0A12;color:#F5F3FA;font-family:-apple-system,system-ui,sans-serif}}
+main{{max-width:640px;margin:0 auto;padding:40px 20px}}h1{{font-size:32px;margin:0 0 12px}}p{{color:#A39DB3;line-height:1.55}}
+a.b{{display:inline-block;padding:14px 22px;border-radius:999px;background:#D946EF;color:#1A0820;font-weight:700;text-decoration:none;margin:8px 0 28px}}
+details{{border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 16px;margin:10px 0;background:#16131F}}summary{{cursor:pointer;font-weight:700}}
+details p{{margin:10px 0 0}}a.l{{color:#E879F9}}footer{{margin-top:32px;color:#6E6880;font-size:13px}}</style></head><body><main>
+<h1>{esc(t["h1"])}</h1><p>{esc(t["intro"])}</p><a class="b" href="mailto:newschoolaide@gmail.com">{esc(t["mail"])} · newschoolaide@gmail.com</a>
+{faq}<footer>{esc(t["foot"])} · {other}</footer></main></body></html>"""
+    return HTMLResponse(content=page)
+
 @app.get("/app", response_class=HTMLResponse)
 @app.get("/telecharger", response_class=HTMLResponse)
 async def download_link(request: Request):
