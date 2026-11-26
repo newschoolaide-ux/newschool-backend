@@ -1,5 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr
@@ -37,6 +39,59 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def header_lang(request) -> Optional[str]:
+    """« en » ou « fr » d'après l'en-tête Accept-Language envoyé par l'app (None si absent ou autre)."""
+    raw = ((request.headers.get("accept-language") if request is not None else None) or "").strip().lower()[:2]
+    return raw if raw in ("fr", "en") else None
+
+# Messages d'erreur dans la langue de l'app (en-tête Accept-Language) : l'app les affiche tels quels
+ERRORS_FR = {
+    "Event not found": "School introuvable",
+    "User not found": "Utilisateur introuvable",
+    "Invalid token": "Session expirée, reconnecte-toi",
+    "Email already registered": "Cet e-mail a déjà un compte",
+    "Account banned": "Ce compte a été suspendu",
+    "Invalid Apple token": "Connexion Apple impossible, réessaie",
+    "This event is for women only": "Cette School est réservée aux femmes",
+    "This event is for men only": "Cette School est réservée aux hommes",
+    "Please set your gender in your profile to join this event": "Indique ton genre dans ton profil pour rejoindre cette School",
+    "Only the creator can edit this event": "Seul le créateur peut modifier cette School",
+    "Not authorized": "Action non autorisée",
+    "Not a participant": "Rejoins la School pour accéder au chat",
+    "Invalid credentials": "E-mail ou mot de passe incorrect",
+    "Invalid code": "Code incorrect",
+    "Invalid email or code": "E-mail ou code incorrect",
+    "Code expired": "Code expiré, demande-en un nouveau",
+    "Event is full": "Cette School est complète",
+    "Creator cannot leave": "Le créateur ne peut pas quitter sa School",
+    "Already joined": "Tu es déjà dans cette School",
+    "Email required": "E-mail requis",
+    "Email, code and new_password required": "E-mail, code et nouveau mot de passe requis",
+    "Invalid referral code": "Code de parrainage invalide",
+}
+ERRORS_EN = {
+    "Clé invalide": "Invalid key",
+    "Tu ne peux pas te suivre toi-même": "You can't follow yourself",
+    "Rejoins la School pour inviter du monde": "Join the School to invite people",
+    "Recherche indisponible": "Search unavailable",
+    "Pas de photo": "No photo",
+    "Email et code requis": "Email and code required",
+    "Email deja inscrit": "Email already registered",
+    "Code de parrainage invalide": "Invalid referral code",
+    "Cette School est terminée": "This School has ended",
+}
+
+@app.exception_handler(StarletteHTTPException)
+async def translated_http_exception(request: Request, exc: StarletteHTTPException):
+    detail = exc.detail
+    if isinstance(detail, str):
+        lang = header_lang(request)
+        if lang == "en":
+            detail = ERRORS_EN.get(detail, detail)
+        elif lang == "fr":
+            detail = ERRORS_FR.get(detail, detail)
+    return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
 
 security = HTTPBearer()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
@@ -163,12 +218,15 @@ async def send_due_reminders(now: Optional[datetime] = None):
             continue
         heure = ev["start_time"].replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Paris")).strftime("%Hh%M")
         lieu = (ev.get("address") or "").split(",")[0].strip()
-        body = f"Rendez-vous à {heure}{' · ' + lieu if lieu else ''}. Un empêchement ? Préviens le groupe dans le chat 🙏"
+        loc = ev["start_time"].replace(tzinfo=timezone.utc).astimezone(ZoneInfo("Europe/Paris"))
+        body_fr = f"Rendez-vous à {heure}{' · ' + lieu if lieu else ''}. Un empêchement ? Préviens le groupe dans le chat 🙏"
+        body_en = f"Meet at {loc.hour}:{loc.minute:02d}{' · ' + lieu if lieu else ''}. Can't make it? Let the group know in the chat 🙏"
         for uid in ev.get("participants", []):
-            u = await db.users.find_one({"_id": uid}, {"push_token": 1})
+            u = await db.users.find_one({"_id": uid}, {"push_token": 1, "lang": 1})
             if u and u.get("push_token"):
-                await send_push_notification(u["push_token"], f"⏰ Dans 1 h : {ev.get('name', 'ta School')}", body,
-                                             {"type": "join", "event_id": ev["_id"]})
+                await send_push_notification(u["push_token"],
+                                             T(u, f"⏰ Dans 1 h : {ev.get('name', 'ta School')}", f"⏰ In 1 hour: {ev.get('name', 'your School')}"),
+                                             T(u, body_fr, body_en), {"type": "join", "event_id": ev["_id"]})
                 sent += 1
     return sent
 
@@ -252,7 +310,14 @@ def create_access_token(data: dict):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def is_en(u: Optional[dict]) -> bool:
+    return (u or {}).get("lang") == "en"
+
+def T(u: Optional[dict], fr: str, en: str) -> str:
+    """Texte dans la langue de l'utilisateur (français par défaut)."""
+    return en if is_en(u) else fr
+
+async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -264,6 +329,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     user = await db.users.find_one({"_id": user_id})
     if user is None:
         raise HTTPException(status_code=401, detail="User not found")
+    # langue de l'app : sert aux notifications qu'on lui enverra
+    lang = header_lang(request)
+    if lang and user.get("lang") != lang:
+        await db.users.update_one({"_id": user_id}, {"$set": {"lang": lang}})
+        user["lang"] = lang
     return user
 
 async def require_admin(current_user: dict = Depends(get_current_user)):
@@ -517,13 +587,21 @@ def _as_utc(d):
 def _heure(d):
     return f"{d.hour}h{d.minute:02d}" if d.minute else f"{d.hour}h"
 
-def school_when(event):
+DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+def school_when(event, lang: str = "fr"):
     now = datetime.now(timezone.utc)
     start = _as_utc(event.get("start_time", now))
     end = _as_utc(event.get("end_time", start + timedelta(hours=2)))
+    en = lang == "en"
     if end < now:
-        return "Cette School est terminée", False
+        return ("This School has ended" if en else "Cette School est terminée"), False
     s, e = start.astimezone(PARIS), end.astimezone(PARIS)
+    if en:
+        if start <= now:
+            return f"Happening now · until {e.hour}:{e.minute:02d}", True
+        return f"{DAYS_EN[s.weekday()]} {s.day} {MONTHS_EN[s.month - 1]} at {s.hour}:{s.minute:02d}", True
     if start <= now:
         return f"En ce moment · jusqu'à {_heure(e)}", True
     return f"{JOURS[s.weekday()].capitalize()} {s.day} {MOIS[s.month - 1]} à {_heure(s)}", True
@@ -712,9 +790,13 @@ async def campaign_push_halloween(key: str, test: Optional[str] = None, envoyer:
     asyncio.create_task(go())
     return {"envoi_lance": len(users), "school": school["name"] if school else None}
 
-def welcome_push_text(first_name=None):
+def welcome_push_text(first_name=None, lang: str = "fr"):
     prenom = (first_name or "").strip()
-    salut = f"Bienvenue {prenom} 👋" if prenom and prenom != "Utilisateur" else "Bienvenue sur New School 👋"
+    has_name = prenom and prenom.lower() not in NO_NAME
+    if lang == "en":
+        return (f"Welcome {prenom} 👋" if has_name else "Welcome to New School 👋",
+                "I'm Ambroise, the founder. Join a School near you or start your own: that's how you meet people 🙌")
+    salut = f"Bienvenue {prenom} 👋" if has_name else "Bienvenue sur New School 👋"
     return salut, "Moi c'est Ambroise, le fondateur. Rejoins une School près de toi ou lance la tienne : c'est comme ça qu'on rencontre du monde 🙌"
 
 @app.post("/api/admin/campagne/bienvenue-push")
@@ -1271,7 +1353,7 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
         "followers_count": await db.users.count_documents({"following": user["_id"]}),
         "schools_count": await db.events.count_documents({"participants": user["_id"]}),
         "schools_together": await db.events.count_documents({"participants": {"$all": [user["_id"], current_user["_id"]]}}),
-        "upcoming": [event_brief(e) for e in await db.events.find(
+        "upcoming": [event_brief(e, current_user.get("lang") or "fr") for e in await db.events.find(
             {"participants": user["_id"], "end_time": {"$gt": datetime.utcnow()}}).sort("start_time", 1).to_list(5)],
     }
 class PushTokenRequest(BaseModel):
@@ -1295,9 +1377,9 @@ async def save_push_token(data: PushTokenRequest, current_user: dict = Depends(g
     if (not current_user.get("welcome_push_at") and not can_email(current_user.get("email"))
             and isinstance(created, datetime) and datetime.utcnow() - created.replace(tzinfo=None) < timedelta(days=2)):
         await db.users.update_one({"_id": current_user["_id"]}, {"$set": {"welcome_push_at": datetime.utcnow()}})
-        async def later(tok=data.push_token, name=current_user.get("first_name")):
+        async def later(tok=data.push_token, name=current_user.get("first_name"), lang=current_user.get("lang") or "fr"):
             await asyncio.sleep(600)
-            await send_push_notification(tok, *welcome_push_text(name))
+            await send_push_notification(tok, *welcome_push_text(name, lang))
         asyncio.create_task(later())
 
     return {"message": "Push token saved"}
@@ -1423,8 +1505,8 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         for user in nearby_users:
             await send_push_notification(
                 user["push_token"],
-                "Nouvelle New School près de vous ! 📍",
-                f"\"{event.name}\" vient d'être créée",
+                T(user, "Nouvelle New School près de vous ! 📍", "New School near you! 📍"),
+                T(user, f"\"{event.name}\" vient d'être créée", f"\"{event.name}\" was just created"),
                 {"type": "join", "event_id": event_id}
             )
     except Exception as e:
@@ -1722,8 +1804,9 @@ async def join_event(event_id: str, current_user: dict = Depends(get_current_use
     if creator and creator.get("push_token"):
         await send_push_notification(
             push_token=creator["push_token"],
-            title="Nouveau participant ! 🎉",
-            body=f"{current_user.get('first_name', 'Quelqu un')} a rejoint votre événement {event['name']}",
+            title=T(creator, "Nouveau participant ! 🎉", "New participant! 🎉"),
+            body=T(creator, f"{current_user.get('first_name', 'Quelqu un')} a rejoint votre événement {event['name']}",
+                   f"{current_user.get('first_name') or 'Someone'} joined your School {event['name']}"),
             data={"type": "join", "event_id": event_id}
         )
     # Ceux qui suivent cette personne : « Alban va à … »
@@ -1744,8 +1827,8 @@ async def leave_event(event_id: str, current_user: dict = Depends(get_current_us
         leaver_name = current_user.get("first_name", "Quelqu'un")
         await send_push_notification(
             creator["push_token"],
-            "Départ d'un participant 👋",
-            f"{leaver_name} a quitté votre New School \"{event['name']}\"",
+            T(creator, "Départ d'un participant 👋", "Someone left 👋"),
+            T(creator, f"{leaver_name} a quitté votre New School \"{event['name']}\"", f"{leaver_name} left your School \"{event['name']}\""),
             {"type": "leave", "event_id": event_id}
         )
     
@@ -1798,8 +1881,8 @@ async def update_event(event_id: str, event: EventCreate, current_user: dict = D
             if participant and participant.get("push_token"):
                 await send_push_notification(
                     participant["push_token"],
-                    "Événement modifié 📝",
-                    f"La New School \"{event.name}\" a été mise à jour",
+                    T(participant, "Événement modifié 📝", "School updated 📝"),
+                    T(participant, f"La New School \"{event.name}\" a été mise à jour", f"The School \"{event.name}\" was updated"),
                     {"type": "updated", "event_id": event_id}
                 )
     
@@ -1823,8 +1906,8 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
             if participant and participant.get("push_token"):
                 await send_push_notification(
                     participant["push_token"],
-                    "Événement annulé 😔",
-                    f"La New School \"{event['name']}\" a été annulée par le créateur",
+                    T(participant, "Événement annulé 😔", "School cancelled 😔"),
+                    T(participant, f"La New School \"{event['name']}\" a été annulée par le créateur", f"The School \"{event['name']}\" was cancelled by its creator"),
                     {"type": "cancelled", "event_id": event_id}
                 )
     
@@ -1883,7 +1966,7 @@ async def send_message(event_id: str, message: MessageCreate, current_user: dict
             if participant and participant.get("push_token"):
                 await send_push_notification(
                     push_token=participant["push_token"],
-                    title=f"Nouveau message dans {event['name']}",
+                    title=T(participant, f"Nouveau message dans {event['name']}", f"New message in {event['name']}"),
                     body=f"{current_user.get('first_name', 'Quelqu un')}: {message.content[:50]}",
                     data={"type": "message", "event_id": event_id}
                 )
@@ -1933,8 +2016,8 @@ async def get_chats(current_user: dict = Depends(get_current_user)):
 
 # ---------- v1.13 : recroiser les gens après une School ----------
 
-def event_brief(e):
-    when, _ = school_when(e)
+def event_brief(e, lang: str = "fr"):
+    when, _ = school_when(e, lang)
     return {
         "event_id": e["_id"], "name": e.get("name", ""), "theme": e.get("theme"),
         "address": e.get("address", ""), "start_time": iso(e.get("start_time")), "end_time": iso(e.get("end_time")),
@@ -1948,13 +2031,18 @@ async def notify_followers(actor: dict, event: dict, joined: bool) -> list:
     try:
         if not event.get("end_time") or _as_utc(event["end_time"]) < datetime.now(timezone.utc):
             return sent
-        name = actor.get("first_name") or "Quelqu'un"
-        when, _ = school_when(event)
         followers = await db.users.find({"following": actor["_id"], "push_token": {"$exists": True, "$ne": None},
                                          "_id": {"$nin": event.get("participants", [])}}).to_list(300)
         for f in followers:
-            title = f"{name} va à « {event['name']} »" if joined else f"{name} lance une School 🔥"
-            body = f"{when}. Viens avec lui·elle 👋" if joined else f"« {event['name']} » · {when}"
+            when, _ = school_when(event, f.get("lang") or "fr")
+            if is_en(f):
+                name = actor.get("first_name") or "Someone"
+                title = f"{name} is going to \"{event['name']}\"" if joined else f"{name} started a School 🔥"
+                body = f"{when}. Join them 👋" if joined else f"\"{event['name']}\" · {when}"
+            else:
+                name = actor.get("first_name") or "Quelqu'un"
+                title = f"{name} va à « {event['name']} »" if joined else f"{name} lance une School 🔥"
+                body = f"{when}. Viens avec lui·elle 👋" if joined else f"« {event['name']} » · {when}"
             await send_push_notification(f["push_token"], title, body, {"type": "join", "event_id": event["_id"]})
             sent.append(f["_id"])
     except Exception as e:
@@ -2016,8 +2104,10 @@ async def follow_user(user_id: str, current_user: dict = Depends(get_current_use
         # une seule fois par personne, même si on se désabonne / réabonne
         first = await db.users.update_one({"_id": user_id}, {"$addToSet": {"follow_notified": current_user["_id"]}})
         if first.modified_count:
-            await send_push_notification(target["push_token"], f"{current_user.get('first_name') or 'Quelqu un'} te suit 👀",
-                                         "Tu seras dans ses notifs quand tu lances une School. Suis-le·la en retour ?",
+            await send_push_notification(target["push_token"],
+                                         T(target, f"{current_user.get('first_name') or 'Quelqu un'} te suit 👀", f"{current_user.get('first_name') or 'Someone'} follows you 👀"),
+                                         T(target, "Tu seras dans ses notifs quand tu lances une School. Suis-le·la en retour ?",
+                                           "They'll be notified when you start a School. Follow them back?"),
                                          {"type": "user", "user_id": current_user["_id"]})
     return {"is_following": True}
 
@@ -2051,13 +2141,16 @@ async def invite_to_event(event_id: str, req: InviteRequest, current_user: dict 
     if not allowed:
         return {"sent": 0}
     await db.events.update_one({"_id": event_id}, {"$addToSet": {f"invited.{uid}": {"$each": allowed}}})
-    name = current_user.get("first_name") or "Quelqu'un"
-    when, _ = school_when(event)
     place = f" · {event['address']}" if event.get("address") else ""
     sent = 0
     async for u in db.users.find({"_id": {"$in": allowed}, "push_token": {"$exists": True, "$ne": None}}):
-        await send_push_notification(u["push_token"], f"{name} t'invite à « {event['name']} » 🙌",
-                                     f"{when}{place}. On se refait ça ?", {"type": "join", "event_id": event_id})
+        when, _ = school_when(event, u.get("lang") or "fr")
+        if is_en(u):
+            title, body = f"{current_user.get('first_name') or 'Someone'} invited you to \"{event['name']}\" 🙌", f"{when}{place}. Up for it?"
+        else:
+            inviter = current_user.get("first_name") or "Quelqu'un"
+            title, body = f"{inviter} t'invite à « {event['name']} » 🙌", f"{when}{place}. On se refait ça ?"
+        await send_push_notification(u["push_token"], title, body, {"type": "join", "event_id": event_id})
         sent += 1
     return {"sent": len(allowed), "notified": sent}
 
