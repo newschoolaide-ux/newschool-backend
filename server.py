@@ -861,6 +861,49 @@ async def campaign_name_push(key: str, test: Optional[str] = None, envoyer: bool
         await asyncio.sleep(0.1)
     return {"envoye": n}
 
+def weekend_push_text(u):
+    prenom = (u.get("first_name") or "").strip()
+    has = prenom and not has_no_name(u)
+    if is_en(u):
+        return ("The weekend is here 🎉",
+                f"{prenom + ', n' if has else 'N'}obody around this weekend? Start a School: drinks, a movie, the Christmas market… people nearby will join you.")
+    return ("Le week-end arrive 🎉",
+            f"{prenom + ', p' if has else 'P'}ersonne de dispo ce week-end ? Lance une School : un verre, un ciné, le marché de Noël… les gens du coin te rejoignent.")
+
+@app.post("/api/admin/campagne/weekend-push")
+async def campaign_weekend_push(key: str, test: Optional[str] = None, envoyer: bool = False):
+    """Notif « Le week-end arrive » à tous les comptes avec notifs, sauf ceux déjà inscrits à une School dans les 3 jours.
+    Une seule fois par semaine (marqueur weekend_push_wk). Sans « envoyer » : aperçu des chiffres."""
+    if not CAMPAIGN_KEY or not hmac.compare_digest(key, CAMPAIGN_KEY):
+        raise HTTPException(status_code=403, detail="Clé invalide")
+    if test:
+        u = await db.users.find_one({"email": test, "push_token": {"$exists": True, "$nin": [None, ""]}})
+        if not u:
+            return {"test": test, "envoye": False, "raison": "pas de compte avec ce mail, ou notifications désactivées"}
+        t, b = weekend_push_text(u)
+        await send_push_notification(u["push_token"], t, b, {"type": "create"})
+        return {"test": test, "envoye": True, "titre": t, "texte": b}
+    now = datetime.utcnow()
+    wk = now.strftime("%G-W%V")
+    busy = set()
+    async for e in db.events.find({"start_time": {"$gte": now - timedelta(hours=3), "$lte": now + timedelta(days=3)}}, {"participants": 1}):
+        busy.update(e.get("participants", []))
+    users = await db.users.find({"is_banned": {"$ne": True}, "push_token": {"$exists": True, "$nin": [None, ""]}},
+                                {"first_name": 1, "push_token": 1, "lang": 1, "weekend_push_wk": 1}).to_list(5000)
+    cibles = [u for u in users if u["_id"] not in busy and u.get("weekend_push_wk") != wk]
+    if not envoyer:
+        return {"avec_notifs": len(users), "deja_dans_une_school": sum(1 for u in users if u["_id"] in busy),
+                "deja_envoye_cette_semaine": sum(1 for u in users if u.get("weekend_push_wk") == wk),
+                "a_notifier": len(cibles), "dont_anglais": sum(1 for u in cibles if is_en(u)),
+                "exemple_fr": weekend_push_text({"first_name": "Léa"}), "exemple_en": weekend_push_text({"first_name": "Sam", "lang": "en"})}
+    n = 0
+    for u in cibles:
+        await send_push_notification(u["push_token"], *weekend_push_text(u), {"type": "create"})
+        await db.users.update_one({"_id": u["_id"]}, {"$set": {"weekend_push_wk": wk}})
+        n += 1
+        await asyncio.sleep(0.1)
+    return {"envoye": n}
+
 @app.get("/api/admin/liens")
 async def link_stats(key: str):
     """Clics sur le lien de téléchargement, par source (qr, bio…) et par téléphone."""
